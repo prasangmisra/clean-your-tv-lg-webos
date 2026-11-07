@@ -1,5 +1,30 @@
 # Installer recovery journey (unreleased)
 
+## Developer Mode directory preflight (unreleased)
+
+New No-root operations inspect the TV directory layout before creating the host
+pending receipt or capsule. An invalid/unknown reply or rejected layout stops
+without recording a new operation or sending package requests. `prepare` repeats
+the checks after the receipt is saved; a later connection failure or race still
+retains the pending receipt for recovery.
+
+The observer accepts the two exact SDK containers `/media/developer` and
+`/media/developer/temp` with UID/GID 0 and exact mode `0775` or `0777`. This matches
+the shared Developer Mode layout without changing TV permissions. The exception
+does not cover other paths, symlinks, other owners/groups, special mode bits,
+private operation directories or public staging leaves. Private evidence still
+requires the connected UID and mode `0700`/`0600`; staging still verifies its
+ownership and saved inode. Existing terminal-stream and capsule checks remain.
+
+This is a prospective installation correction, not a migration of old pending
+operations. Absence of the TV observer directory is not completion evidence.
+Older capsules remain bound to their original source; do not edit/delete them
+or fabricate receipts to force a new installation. A supported recovery change
+for an already retained preparation failure is separate work. Host fixture
+results are not physical TV installation or Home-control acceptance.
+
+## Existing recovery journey
+
 `cytv recover` is shared by console, desktop and Android. A pending `install`
 delegates to this journey and returns before new installation. The host TV lock
 and operation-context snapshot remain in force. `--yes` never approves recovery;

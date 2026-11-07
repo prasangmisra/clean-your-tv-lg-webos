@@ -119,6 +119,16 @@ class OriginalOperationIntegration(unittest.TestCase):
         self.installer=operations.Installer(self.remote,self.store,self.profile,fixture.payload,fixture.manifest,lambda *_:None)
         self.inventory=fixture.inventory
 
+    def test_rejected_layout_does_not_create_a_pending_operation(self):
+        from cytv.errors import UserError
+        self.root.chmod(0o777)
+        with self.assertRaisesRegex(UserError, 'before recording an operation'):
+            observer.begin(self.installer, 'install', {}, {}, {}, {})
+        self.assertIsNone(self.store.pending(self.profile))
+        self.assertFalse((self.root/'private').exists())
+        self.assertFalse((self.root/'requests').exists())
+        self.assertEqual([call[1] for call in self.remote.calls if call[0]=='observer'], ['preflight'])
+
     def test_removal_transport_loss_cannot_be_sealed_by_empty_eim_inventory(self):
         self.installer.install(self.inventory,'original-secret')
         (self.root/'requests').write_text('')

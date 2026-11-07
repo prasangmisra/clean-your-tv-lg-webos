@@ -40,8 +40,13 @@ function exists(name){try{fs.lstatSync(name);return true;}catch(e){if(e.code==='
 function directory(name,privateLeaf){
  var s=fs.lstatSync(name);
  if(!s.isDirectory()||s.isSymbolicLink()||(s.uid!==0&&s.uid!==uid))fail('unsafe-directory');
+ // LG exposes these fixed SDK containers as shared directories. This exception
+ // never applies to private evidence, operation directories or public stages.
+ var sdkContainer=!privateLeaf&&s.uid===0&&s.gid===0&&
+  (name==='/media/developer'||name==='/media/developer/temp')&&
+  ((s.mode&4095)===509||(s.mode&4095)===511);
  // A root-owned sticky temporary ancestor is safe for an owned private child.
- if((s.mode&18)&&!(s.uid===0&&(s.mode&512)))fail('writable-directory');
+ if((s.mode&18)&&!(s.uid===0&&(s.mode&512))&&!sdkContainer)fail('writable-directory');
  if(privateLeaf&&(s.uid!==uid||(s.mode&511)!==448))fail('nonprivate-directory');
  return s;
 }
@@ -85,6 +90,18 @@ function atomicNew(name,value){
  sync(path.dirname(name));
 }
 if(typeof c.O_NOFOLLOW!=='number'||typeof c.O_EXCL!=='number')fail('unsupported-storage');
+// Inspect the layout before the host creates its durable pending operation.
+// prepare() repeats these checks; preflight grants no package/recovery authority.
+if(input.command==='preflight'){
+ if(typeof root!=='string'||root!==path.resolve(root)||typeof publicRoot!=='string'||publicRoot!==path.resolve(publicRoot))fail('invalid-path');
+ if(input.action!=='install'&&input.action!=='remove')fail('invalid-action');
+ ancestry(path.dirname(root));if(input.action==='install')ancestry(publicRoot,true);
+ if(exists(root)){
+  ancestry(root);directory(root,true);
+  if(exists(root+'/operations'))directory(root+'/operations',true);
+ }
+ process.stdout.write(JSON.stringify({preflight:'ready'}));return;
+}
 if(!plan||plan.protocol!==protocol||plan.edition!=='no-root'||!/^\w{32}$/.test(plan.operation)||
    !/^[a-f0-9]{32}$/.test(plan.operation)||!/^[a-f0-9]{32}$/.test(plan.diagnostic_id)||
    (plan.action!=='install'&&plan.action!=='remove')||!Array.isArray(plan.slots)||plan.slots.length!==2||
@@ -492,7 +509,19 @@ def refuse():
                     reason_code='pending-operation')
 
 
+def preflight(installer, action):
+    request = dict(root=ROOT, public_root=PUBLIC_ROOT, command='preflight', action=action)
+    try:
+        reply = json.loads(installer.remote.run('env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node -e ' +
+                           shlex.quote(PROGRAM) + ' ' + shlex.quote(canonical(request)), timeout=30))
+        if reply != {'preflight': 'ready'}:
+            raise ValueError('unverified-layout')
+    except (OSError, RuntimeError, ValueError, TypeError):
+        raise UserError('TV installation directory checks failed before recording an operation. No package requests were sent.') from None
+
+
 def begin(installer, action, artifacts, versions, expected, configuration):
+    preflight(installer, action)
     operation = uuid.uuid4().hex
     installer.store.begin(installer.profile, 'install' if action == 'install' else 'uninstall',
                           recovery_protocol=PROTOCOL, observer_operation=operation,

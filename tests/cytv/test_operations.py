@@ -25,7 +25,9 @@ class Remote:
             code=args[args.index('-e')+1]
             if code==no_root_observer.PROGRAM:
                 import hashlib
-                request=json.loads(args[-1]);plan=request['plan'];action=request['command'];index=request.get('slot')
+                request=json.loads(args[-1])
+                if request['command']=='preflight':return json.dumps({'preflight':'ready'})
+                plan=request['plan'];action=request['command'];index=request.get('slot')
                 operation=plan['operation']
                 if action=='prepare':
                     self.observers.setdefault(operation,{'protocol':no_root_observer.PROTOCOL,'operation':operation,'plan_sha256':hashlib.sha256(no_root_observer.canonical(plan).encode()).hexdigest(),
