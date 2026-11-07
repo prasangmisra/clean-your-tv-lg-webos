@@ -16,6 +16,9 @@ kernel write/execute access where supported (POSIX mode/identity fallback on
 Node 0.10) before recording pending work. No TV directory permissions are changed.
 Full cleanup inventories and removes both the legacy and current private roots,
 including their operation IDs when identifying owned staging artifacts.
+Preparation streams its trusted program and original bound source over SSH
+stdin rather than duplicating them in a large exec argument. Binary uploads
+retain their existing separate stdin transport and original-stream guards.
 
 The observer accepts the two exact SDK containers `/media/developer` and
 `/media/developer/temp` with UID/GID 0 and exact mode `0775` or `0777`. This matches

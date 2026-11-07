@@ -53,6 +53,14 @@ sys.stdin.read()
             return super().run(command,data,timeout)
         if 'CYTV_STOP_RETAINED' in command:
             return subprocess.run(['sh','-c',command],capture_output=True,check=True).stdout.decode()
+        if command=='env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node' and data is not None:
+            prefix,code=data.decode().split('\n',1)
+            argument=json.loads(prefix[len('process.argv.push('):-2])
+            request=json.loads(argument)
+            self.calls.append(('observer',request['command'],request.get('slot')))
+            result=subprocess.run([shutil.which('node')],input=data,capture_output=True,timeout=timeout)
+            if result.returncode:raise RuntimeError(result.stderr.decode())
+            return result.stdout.decode()
         words=shlex.split(command)
         if '-e' in words and '/usr/bin/node' in words:
             code=words[words.index('-e')+1]

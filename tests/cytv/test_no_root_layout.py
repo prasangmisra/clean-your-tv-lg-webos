@@ -106,3 +106,18 @@ fixtureFs.accessSync=function(name){
                 with self.assertRaises(UserError):
                     observer.begin(installer, 'install', {}, {}, {}, {})
                 installer.store.begin.assert_not_called()
+
+    def test_prepare_streams_bound_source_instead_of_a_large_ssh_argument(self):
+        remote=Mock()
+        remote.run.return_value=json.dumps({'operation':'a'*32})
+        plan=observer.make_plan('a'*32,'b'*32,'install',{'helper.ipk':b'helper','launcher.ipk':b'home'},
+                                dict(zip(observer.APPS,['1','2'])))
+        observer.invoke(remote,plan,'prepare')
+        args,kwargs=remote.run.call_args
+        self.assertEqual(args,('env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node',))
+        prefix,program=kwargs['data'].decode().split('\n',1)
+        request=json.loads(json.loads(prefix[len('process.argv.push('):-2]))
+        self.assertEqual(program,observer.PROGRAM)
+        self.assertEqual(request['source'],observer.PROGRAM)
+        self.assertEqual(request['plan'],plan)
+        self.assertEqual(request['command'],'prepare')

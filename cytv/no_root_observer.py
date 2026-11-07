@@ -504,8 +504,17 @@ def invoke(remote, plan, command, slot=None, source=None, proof=None, data=None)
         request['source'] = PROGRAM if source is None else source
     if proof is not None:request['proof']=proof
     try:
-        reply = json.loads(remote.run('env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node -e ' +
-                                     shlex.quote(PROGRAM) + ' ' + shlex.quote(canonical(request)), data=data, timeout=100 if data is not None else 30))
+        if command == 'prepare':
+            if data is not None:
+                raise ValueError('unexpected-prepare-input')
+            # prepare carries the original source twice. Old TV SSH servers
+            # reject that long exec argument; stream it through stdin instead.
+            script = ('process.argv.push(' + json.dumps(canonical(request)) + ');\n' + PROGRAM).encode()
+            raw = remote.run('env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node', data=script, timeout=30)
+        else:
+            raw = remote.run('env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node -e ' +
+                             shlex.quote(PROGRAM) + ' ' + shlex.quote(canonical(request)), data=data, timeout=100 if data is not None else 30)
+        reply = json.loads(raw)
         if not isinstance(reply, dict) or reply.get('operation') != plan['operation']:
             raise ValueError('foreign-observer')
         return reply

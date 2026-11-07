@@ -20,6 +20,11 @@ class Remote:
     def run(self, command, data=None, timeout=30):
         self.calls.append(('run', command))
         from cytv import no_root_observer
+        if command=='env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node' and data is not None:
+            prefix,code=data.decode().split('\n',1)
+            argument=json.loads(prefix[len('process.argv.push('):-2])
+            command='env -u NODE_OPTIONS -u NODE_PATH /usr/bin/node -e '+shlex.quote(code)+' '+shlex.quote(argument)
+            data=None
         if '/usr/bin/node -e ' in command:
             args=shlex.split(command)
             code=args[args.index('-e')+1]
