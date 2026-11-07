@@ -420,6 +420,25 @@ class SimpleRemoval(unittest.TestCase):
         self.assertFalse(any(uri.endswith('/dev/remove') for uri,_ in self.remote.calls))
         self.reboot();self.assertTrue(self.remove()['verified_clean']);self.assertFalse(source.exists())
 
+    def test_preparation_failure_without_tv_observer_is_archived_after_verified_cleanup(self):
+        self.store.begin(self.profile,'install',recovery_protocol='no-root-original-stream-v1',
+                         observer_operation='a'*32)
+        directory=self.store.device_dir(self.profile)
+        original=(directory/'operation.json').read_bytes()
+        digest=self.store.save_capsule(self.profile,'a'*32,{'original':'retained, never executed'})
+        self.assertFalse((self.root/'developer/.cytv-installer').exists())
+        self.assertTrue(self.remove()['restart_required'])
+        pending=self.store.pending(self.profile)
+        archive=directory/pending['original_receipt']
+        self.assertEqual(archive.read_bytes(),original)
+        self.assertFalse(any(uri.endswith(('/dev/install','/dev/remove')) for uri,_ in self.remote.calls))
+        self.reboot()
+        self.assertTrue(self.remove()['verified_clean'])
+        self.assertIsNone(self.store.pending(self.profile))
+        self.assertEqual(archive.read_bytes(),original)
+        self.assertEqual(self.store.read_capsule(self.profile,'a'*32,digest),{'original':'retained, never executed'})
+        self.assertFalse(any(uri.endswith(('/dev/install','/dev/remove')) for uri,_ in self.remote.calls))
+
     @unittest.skipIf(getattr(os,'getuid',lambda:-1)()==0,'permission boundary requires an unprivileged SDK model')
     def test_actual_registration_permission_denial_requests_root_access(self):
         directory=self.root/'bus/roles.d';directory.mkdir();role=directory/'com.local.nativehome.service.json';role.write_text('{}')

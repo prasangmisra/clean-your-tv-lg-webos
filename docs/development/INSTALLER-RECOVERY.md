@@ -19,9 +19,15 @@ ownership and saved inode. Existing terminal-stream and capsule checks remain.
 This is a prospective installation correction, not a migration of old pending
 operations. Absence of the TV observer directory is not completion evidence.
 Older capsules remain bound to their original source; do not edit/delete them
-or fabricate receipts to force a new installation. A supported recovery change
-for an already retained preparation failure is separate work. Host fixture
-results are not physical TV installation or Home-control acceptance.
+or fabricate receipts to force a new installation. For an already retained
+preparation failure, explicitly choose **Uninstall Clean Your TV** from the
+maintenance actions instead of attempting to resume the original installation.
+That existing full-project cleanup archives the original receipt, restores LG
+Home and requires a full power restart before final absence verification. It
+does not reinterpret missing observer files as successful installation or replay
+the original package requests. Only verified cleanup permits a separate new
+setup. Host fixture results are not physical TV installation or Home-control
+acceptance.
 
 ## Existing recovery journey
 
