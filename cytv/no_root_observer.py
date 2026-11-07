@@ -14,7 +14,7 @@ import uuid
 from .errors import UserError
 
 PROTOCOL = 'no-root-original-stream-v1'
-ROOT = '/media/developer/.cytv-installer'
+ROOT = '/media/developer/temp/.cytv-installer'
 PUBLIC_ROOT = '/media/developer/temp'
 APPS = ('com.local.nativehome', 'com.gathin.tvhome')
 
@@ -53,6 +53,14 @@ function directory(name,privateLeaf){
 function ancestry(name,publicAccess){
  var current=path.resolve(name);
  for(;;){var s=directory(current,false);if(publicAccess&&!(s.mode&1))fail('private-public-parent');var parent=path.dirname(current);if(parent===current)break;current=parent;}
+}
+function writableDirectory(name){
+ if(typeof fs.accessSync==='function'){fs.accessSync(name,3);return;}
+ // accessSync is unavailable on Node 0.10. Use the connected POSIX identity;
+ // prepare still checks the actual create and retains evidence on any failure.
+ var s=fs.lstatSync(name),groups=process.getgroups?process.getgroups():[process.getgid()];
+ var bits=uid===s.uid?s.mode>>6:groups.indexOf(s.gid)>=0?s.mode>>3:s.mode;
+ if(uid!==0&&(bits&3)!==3)fail('directory-not-writable');
 }
 function sync(name){var fd=fs.openSync(name,c.O_RDONLY|c.O_NOFOLLOW);try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}}
 function mkdir(name,mode){
@@ -96,6 +104,8 @@ if(input.command==='preflight'){
  if(typeof root!=='string'||root!==path.resolve(root)||typeof publicRoot!=='string'||publicRoot!==path.resolve(publicRoot))fail('invalid-path');
  if(input.action!=='install'&&input.action!=='remove')fail('invalid-action');
  ancestry(path.dirname(root));if(input.action==='install')ancestry(publicRoot,true);
+ writableDirectory(exists(root)?root:path.dirname(root));
+ if(input.action==='install')writableDirectory(publicRoot);
  if(exists(root)){
   ancestry(root);directory(root,true);
   if(exists(root+'/operations'))directory(root+'/operations',true);

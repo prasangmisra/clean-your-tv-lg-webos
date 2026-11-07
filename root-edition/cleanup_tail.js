@@ -206,7 +206,8 @@ function absent(final) {
   [
     '/var/luna-service2/manifests.d/com.cleanyourtv.root.preview.recovery.json',
     '/var/webos-profile/override/clean-your-tv-root.json',
-    '/media/developer/.cytv-installer'
+    '/media/developer/.cytv-installer',
+    '/media/developer/temp/.cytv-installer'
   ].forEach(function (path) {
     if (exists(path)) throw Error('owned-private-registration-remains');
   });

@@ -420,6 +420,17 @@ class SimpleRemoval(unittest.TestCase):
         self.assertFalse(any(uri.endswith('/dev/remove') for uri,_ in self.remote.calls))
         self.reboot();self.assertTrue(self.remove()['verified_clean']);self.assertFalse(source.exists())
 
+    def test_legacy_and_writable_container_observers_are_both_retired_after_restart(self):
+        paths=[self.own_file(prefix+'/operations/'+identifier+'/private.json','retained evidence')
+               for prefix,identifier in (('.cytv-installer','a'*32),('temp/.cytv-installer','b'*32))]
+        first=self.remove()
+        self.assertTrue(first['restart_required'])
+        self.assertTrue(all(path.exists() for path in paths))
+        self.assertEqual(set(self.store.pending(self.profile)['cleanup_staging_ids']),{'a'*32,'b'*32})
+        self.reboot()
+        self.assertTrue(self.remove()['verified_clean'])
+        self.assertTrue(all(not path.exists() for path in paths))
+
     def test_preparation_failure_without_tv_observer_is_archived_after_verified_cleanup(self):
         self.store.begin(self.profile,'install',recovery_protocol='no-root-original-stream-v1',
                          observer_operation='a'*32)

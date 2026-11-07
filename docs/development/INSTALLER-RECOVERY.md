@@ -8,6 +8,15 @@ without recording a new operation or sending package requests. `prepare` repeats
 the checks after the receipt is saved; a later connection failure or race still
 retains the pending receipt for recovery.
 
+New observer state is stored in the private, connected-user-owned directory
+`/media/developer/temp/.cytv-installer`. Some Developer Mode environments expose
+`/media/developer` as root-owned `0775` without granting the SSH user write
+access; accepting that ancestor does not make it writable. Preflight checks
+kernel write/execute access where supported (POSIX mode/identity fallback on
+Node 0.10) before recording pending work. No TV directory permissions are changed.
+Full cleanup inventories and removes both the legacy and current private roots,
+including their operation IDs when identifying owned staging artifacts.
+
 The observer accepts the two exact SDK containers `/media/developer` and
 `/media/developer/temp` with UID/GID 0 and exact mode `0775` or `0777`. This matches
 the shared Developer Mode layout without changing TV permissions. The exception
