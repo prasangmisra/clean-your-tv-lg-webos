@@ -22,6 +22,45 @@ class UserError(RuntimeError):
         self.reason_code = reason_code
 
 
+LOCAL_RECOVERY_REASONS = ('directory-owner', 'directory-permissions', 'directory-type',
+                          'directory-access', 'storage-unavailable', 'operation-invalid',
+                          'capsule-missing', 'capsule-permissions', 'capsule-unsafe',
+                          'capsule-changed', 'capsule-invalid', 'capsule-access', 'source-incompatible')
+
+
+def local_recovery_details(value):
+    value = value if type(value) is dict else {}
+    result = {key: value.get(key) if type(value.get(key)) is str and value[key] in allowed else 'unknown'
+              for key, allowed in (('reason', LOCAL_RECOVERY_REASONS),
+                                   ('location', ('profile', 'ancestor', 'capsule', 'operation')))}
+    mode = value.get('mode')
+    if type(mode) is str and re.fullmatch('[0-7]{4}', mode):
+        result['mode'] = mode
+    if type(value.get('owner')) is str and value['owner'] in ('root', 'current-user', 'other'):
+        result['owner'] = value['owner']
+    return result
+
+
+class LocalRecoveryError(UserError):
+    """Fixed local failure categories; no paths, account names or raw exceptions."""
+    def __init__(self, reason, location='capsule', *, mode=None, owner=None, storage_full=False):
+        self.local_recovery = local_recovery_details(dict(reason=reason, location=location, mode=mode, owner=owner))
+        reason = self.local_recovery['reason']
+        message = ('Local recovery storage could not be verified.' if reason.startswith('directory-') or reason == 'storage-unavailable' else
+                   'The original private recovery file is missing.' if reason == 'capsule-missing' else
+                   'The saved recovery operation is incompatible with this installer.' if reason == 'source-incompatible' else
+                   'The original private recovery file could not be verified.')
+        super().__init__((COMPUTER_STORAGE_FULL if storage_full else message) + ' Recovery data was kept.',
+                         reason_code='computer-storage-full' if storage_full else 'pending-operation')
+
+
+def connection_interrupted(error):
+    """Transient transport loss only; credentials and host trust never retry."""
+    return (getattr(error, 'reason_code', None) == 'connection-interrupted'
+            or isinstance(error, (ConnectionError, TimeoutError))
+            or type(error).__name__ in ('SSHException', 'NoValidConnectionsError'))
+
+
 
 class PythonCacheError(UserError):
     """Allowlisted host acquisition failure; never carry remote exception text."""
@@ -170,3 +209,56 @@ def root_recovery_details(value):
         number = value.get(key)
         if type(number) is int and low <= number <= high: result[key] = number
     return result
+
+
+# Fixed runtime categories shared by the trusted launcher and report revalidation.
+OBSERVER_EXCEPTION_NAMES = ('Error', 'TypeError', 'SyntaxError', 'ReferenceError', 'RangeError')
+OBSERVER_EXCEPTION_CODES = ('MODULE_NOT_FOUND', 'ERR_DLOPEN_FAILED', 'EACCES', 'EPERM',
+                            'ENOENT', 'ENOSPC', 'EDQUOT', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP',
+                            'EEXIST', 'ENOTDIR', 'EISDIR', 'ELOOP', 'EROFS', 'EMFILE', 'ENFILE', 'EIO')
+OBSERVER_FILESYSTEM_OPERATIONS = ('lstat', 'stat', 'open', 'read', 'write', 'mkdir', 'rmdir',
+                                 'link', 'unlink', 'rename', 'scandir', 'readdir', 'fsync',
+                                 'fchmod', 'fchown', 'fstat', 'close')
+OBSERVER_STORAGE_AREAS = ('private-storage', 'public-staging', 'storage-parent')
+OBSERVER_REASONS = (
+    'changed-artifact', 'changed-directory', 'changed-file',
+    'changed-plan-source', 'changed-public-stage', 'changed-reservation',
+    'changed-source', 'changed-upload', 'changed-upload-directory',
+    'claimed-artifact-missing', 'configuration-unverified', 'conflicting-terminal',
+    'foreign-configuration-result', 'foreign-evidence', 'foreign-reservation',
+    'foreign-slot', 'invalid-claim', 'invalid-closure',
+    'invalid-configuration-claim', 'invalid-configuration-result', 'invalid-configuration-step',
+    'invalid-configuration-upload', 'invalid-plan', 'invalid-readback',
+    'invalid-seal', 'invalid-slot', 'invalid-terminal',
+    'invalid-terminal-reply', 'invalid-upload', 'missing-public-stage',
+    'nonprivate-directory', 'operation-closed', 'operation-not-closed',
+    'predecessor-unverified', 'private-public-parent', 'short-read',
+    'short-write', 'terminal-unverified', 'unexpected-reservation',
+    'unresolved-slot', 'unsafe-config-file', 'unsafe-directory',
+    'unsafe-file', 'unsafe-state-owner', 'unsafe-state-parent',
+    'unsupported-command', 'unsupported-storage', 'upload-too-large',
+    'writable-directory',
+)
+
+
+def no_root_observer_details(value):
+    """Revalidate host observer context; never accept remote text or identifiers."""
+    if type(value) is not dict:
+        return {}
+    allowed = {
+        'command': ('storage-select', 'storage-check', 'prepare', 'status', 'attach', 'upload-artifact', 'upload-configuration',
+                    'artifacts', 'config-claim', 'config-result', 'start', 'worker', 'seal',
+                    'readback', 'configured', 'release', 'retire'),
+        'failure': ('command-failed', 'connection-interrupted', 'timeout', 'transport-error',
+                    'invalid-json', 'invalid-reply', 'foreign-operation', 'invalid-status', 'observer-error'),
+    }
+    if value.get('failure') == 'observer-error':
+        allowed.update(exception_name=OBSERVER_EXCEPTION_NAMES, exception_code=OBSERVER_EXCEPTION_CODES,
+                       observer_reason=OBSERVER_REASONS)
+        # Optional for older error envelopes and retained diagnostic records.
+        for key, choices in (('filesystem_operation', OBSERVER_FILESYSTEM_OPERATIONS),
+                             ('storage_area', OBSERVER_STORAGE_AREAS)):
+            if key in value:
+                allowed[key] = choices
+    return {key: value[key] if type(value.get(key)) is str and value[key] in choices else 'unknown'
+            for key, choices in allowed.items()}

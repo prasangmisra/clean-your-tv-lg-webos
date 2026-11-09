@@ -236,6 +236,7 @@ class SSH:
     @classmethod
     def connect(cls, profile, directory, secret, trust, identity_prompt=None, automatic=True, persist=True):
         import paramiko
+        root_ssh = profile['edition'] == 'root' or profile.get('connection') == 'root-ssh'
         directory = Path(directory)
         known = directory / 'known_hosts'
         if not persist:
@@ -253,17 +254,17 @@ class SSH:
 
         class PinnedPolicy(paramiko.MissingHostKeyPolicy):
             def missing_host_key(self, connection, hostname, key):
-                if not persist or not trust(fingerprint(key), profile['edition'] == 'root'):
+                if not persist or not trust(fingerprint(key), root_ssh):
                     raise UserError('SSH host key was not verified. Connection cancelled.', reason_code='ssh-identity-unverified')
                 connection.get_host_keys().add(hostname, key.get_name(), key)
                 save_host_keys(connection.get_host_keys(), known)
 
         client.set_missing_host_key_policy(PinnedPolicy())
         options = dict(hostname=profile['host'], port=profile['port'],
-                       username='root' if profile['edition'] == 'root' else 'prisoner',
+                       username='root' if root_ssh else 'prisoner',
                        timeout=10, banner_timeout=10, auth_timeout=15,
                        allow_agent=False, look_for_keys=False)
-        if profile['edition'] == 'no-root':
+        if not root_ssh:
             # Developer Mode SSH servers may accept only ssh-rsa and omit
             # server-sig-algs; Paramiko otherwise attempts an RSA SHA-2 signature.
             options['disabled_algorithms'] = {'pubkeys': ['rsa-sha2-512', 'rsa-sha2-256']}
@@ -283,9 +284,9 @@ class SSH:
             client.connect(**options)
             if persist:
                 save_host_keys(client.get_host_keys(), known)
-            if persist and profile['edition'] == 'no-root' and not keyfile.exists():
+            if persist and not root_ssh and not keyfile.exists():
                 private_write(keyfile, raw)
-            return cls(client, root=profile['edition'] == 'root')
+            return cls(client, root=root_ssh)
         except AgentLoginFailed:
             client.close()
             if not persist or not automatic or identity_prompt is None:
@@ -342,9 +343,16 @@ class SSH:
                 raise UserError('TV connection interrupted. Run cytv status before retrying.',reason_code='connection-interrupted')
             else:
                 time.sleep(0.02)
-        raise UserError('TV operation timed out. Run cytv status before retrying.')
+        raise UserError('TV operation timed out. Run cytv status before retrying.', reason_code='operation-timeout')
 
     def run(self, command, data=None, timeout=30):
+        # Some TV SSH servers disconnect on large exec requests. A builtin read
+        # consumes only the command header; binary stdin stays on the channel.
+        if len(command.encode('utf-8')) > 4096:
+            data = base64.b64encode(command.encode('utf-8')) + b'\n' + (data or b'')
+            command = ('IFS= read -r cytv_ssh_source || exit 1; '
+                       'cytv_ssh_source=$(printf %s "$cytv_ssh_source" | base64 -d && printf .) || exit 1; '
+                       'exec /bin/sh -c "${cytv_ssh_source%.}"')
         channel = self.channel(command)
         try:
             if data is not None:

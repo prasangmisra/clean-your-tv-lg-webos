@@ -8,6 +8,38 @@ from cytv import cli, diagnostics, state
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_icon_counts_are_allowlisted_again_before_report_and_history_export(self):
+        counts = {'schema': 'PRIVATE', 'status': 'complete', 'apps': 7, 'embedded': 2,
+                  'fallback': 5, 'missing_uri': 1, 'rejected_uri': 2,
+                  'fetch_failed': 2, 'invalid_image': 1, 'PRIVATE': 'PRIVATE'}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = diagnostics.create_report(state.Store(tmp), 'install', None, 'read-inventory',
+                                             tv_info={'icon_inventory': counts})
+            report = json.loads(path.read_text())
+            expected = dict(counts, schema=1)
+            del expected['PRIVATE']
+            self.assertEqual(report['tv'].get('icon_inventory'), expected)
+            from cytv.diagnostic_context import failure_summary, tv_summary
+            self.assertEqual(failure_summary(report)['tv']['icon_inventory'], expected)
+            self.assertNotIn('PRIVATE', path.read_text())
+            for value in (-1, 1801, True, 'PRIVATE', {}, []):
+                with self.subTest(value=value):
+                    safe = tv_summary({'icon_inventory': {'status': 'PRIVATE', 'apps': value}})
+                    self.assertEqual(safe['icon_inventory'], {'schema': 1, 'status': 'unavailable'})
+
+    def test_ssh_report_exports_cause_without_wrapped_addresses_or_error_text(self):
+        import errno
+        from paramiko.ssh_exception import NoValidConnectionsError
+        with tempfile.TemporaryDirectory() as tmp:
+            for number, code in [(errno.EACCES, 'ssh-access-denied'),
+                                 (errno.ECONNREFUSED, 'ssh-refused'), (errno.ETIMEDOUT, 'ssh-timeout')]:
+                error = NoValidConnectionsError({('PRIVATE-HOST', 22): OSError(number, 'PRIVATE-TEXT')})
+                path = diagnostics.create_report(state.Store(tmp), 'install', None, 'ssh-connect', error)
+                report = json.loads(path.read_text())
+                self.assertEqual(report['reason_code'], code)
+                self.assertEqual(report['guidance']['code'], code)
+                self.assertNotIn('PRIVATE', path.read_text())
+
     def test_package_failure_states_and_fixed_reasons_survive_report_export(self):
         from cytv.transport import terminal_reply
         from cytv.errors import TVRejected
@@ -148,6 +180,15 @@ class DiagnosticTests(unittest.TestCase):
             self.assertEqual(value['state'],'failed')
             self.assertIsNone(value['return_value'])
 
+    def test_project_apps_cleanup_reason_survives_without_remote_text(self):
+        from cytv.errors import UserError
+        with tempfile.TemporaryDirectory() as tmp:
+            report=diagnostics.create_report(state.Store(tmp),'status',None,'status',
+                UserError('PRIVATE',reason_code='project-apps-remain'))
+            value=json.loads(report.read_text())
+            self.assertEqual(value['reason_code'],'project-apps-remain')
+            self.assertNotIn('PRIVATE',report.read_text())
+
     def test_developer_key_reason_is_allowlisted_without_credentials_or_exception_text(self):
         from cytv.errors import DeveloperKeyError
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,6 +254,7 @@ class DiagnosticTests(unittest.TestCase):
     def test_cli_architecture_failure_preserves_probe_results_in_report(self):
         class Remote:
             def run(self, command, **kwargs):
+                if 'CYTV_NODE_VERSION' in command: return 'CYTV_NODE_MISSING'
                 if command == 'uname -m': return 'aarch64'
                 if command == 'LC_ALL=C od -An -v -t u1 -N 20 /bin/sh':
                     return '127 69 76 70 2 1 1 0 0 0 0 0 0 0 0 0 2 0 183 0'
@@ -225,6 +267,7 @@ class DiagnosticTests(unittest.TestCase):
             reports = list(Path(tmp).glob('reports/*.json'))
             self.assertEqual(len(reports), 1)
             self.assertEqual(json.loads(reports[0].read_text())['tv'], {
+                'node_version_status': 'missing',
                 'kernel_arch': 'aarch64', 'userland_abi': 'arm64', 'arm32_supported': False})
 
     def test_cli_failure_provides_issue_link_report_and_requested_debug_details(self):

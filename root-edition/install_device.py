@@ -27,6 +27,14 @@ TEMP=Path('/tmp')
 SUPPORT_STAGE=re.compile(r'cytv-(?:product|coordinator|system-updater|c1-root|root-tail)-[a-f0-9]{32}')
 
 
+class InstallerRuntimeMismatch(ValueError):
+    """A self-consistent old installation is not the selected installer runtime."""
+    reason_code='installer-runtime-mismatch'
+
+    def __init__(self):
+        super().__init__('Installed Root runtime differs from this installer; use verified removal and fresh setup')
+
+
 def checked_store(path, uid=0):
     # Read-only inspection must never provision a state directory.
     store=Store.__new__(Store);store.root=str(path);store.uid=uid
@@ -154,6 +162,18 @@ class LocalDevice:
         from python_binding import launcher_bytes
         launcher_bytes(sys.executable)
         self.options=options
+
+    def require_selected_runtime(self, payload):
+        """Bind a no-submission handoff to current installer code, not old receipts."""
+        import deploy
+        selected=Path(payload)/'root'
+        manifest=deploy.verify_bundle(selected)
+        names=set(deploy.SUPPORT_FILES)|{name for name in manifest['files'] if name.startswith('runtime/')}
+        try:
+            if any(sha(safe_bytes(ROOT/name,uid=os.geteuid()))!=manifest['files'].get(name) for name in names):
+                raise InstallerRuntimeMismatch()
+        except (OSError,ValueError):
+            raise InstallerRuntimeMismatch() from None
 
     def system_setup(self):
         import system_setup
@@ -315,6 +335,22 @@ class LocalDevice:
             self.verify_removed()
             if os.path.lexists(ROOT) and self.cleanup('root_archive','inspect').get('busy') is not False:return False
         return owner.status()==lease
+
+    def native_deploy(self, payload):
+        # The parent owns the shared product mutex. Execute only this upload's
+        # verified driver in isolation, without taking a second deployment lock.
+        root=Path(payload)/'root'
+        program=('import sys,json;from pathlib import Path\n'
+            'sys.path.insert(0,'+repr(str(root))+')\nimport deploy\n'
+            'bundle=Path('+repr(str(root))+')\n'
+            'release=json.loads(deploy.checked_file(bundle,"release.json"))\n'
+            'if release.get("routing")!="compositor-keyfilter-v1":raise ValueError("current_compositor_support_required")\n'
+            'admission=deploy.experimental_admission(release["routing"],owned_operation='+repr(self.operation['id'])+')\n'
+            'print(json.dumps(deploy.install(bundle,experimental_c1_gate=True,_experimental_admission=admission)))\n')
+        result=subprocess.run([sys.executable,'-I','-B','-c',program],check=True,
+            stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=1080,
+            pass_fds=(self.ownership.fd,))
+        return json.loads(result.stdout)
 
     def deploy(self, payload, options):
         import deploy
@@ -502,10 +538,17 @@ class LocalDevice:
         return call('luna://com.cleanyourtv.updater.service/status',{},app_id='com.gathin.tvhome')
 
     def apps(self):
-        value=self.rpc('com.webos.applicationManager/dev/listApps',{})
-        apps=value.get('apps')
-        if not isinstance(apps,list) or not all(isinstance(a,dict) and isinstance(a.get('id'),str) for a in apps):
-            raise ValueError('invalid_app_inventory')
+        from updater.luna import context
+        method='com.webos.applicationManager/dev/listApps'
+        try:value=self.rpc(method,{})
+        except (RuntimeError,TimeoutError) as error:
+            if (str(error) not in ('Bus operation rejected','Bus response timed out')
+                    or getattr(error,'luna',{}).get('reason')=='malformed-reply'):raise
+            method='com.webos.applicationManager/listApps'
+            value=self.rpc(method,{})
+        apps=value.get('apps') if isinstance(value,dict) else None
+        if not isinstance(apps,list) or not all(isinstance(a,dict) and isinstance(a.get('id'),str) and a['id'] for a in apps):
+            raise context(ValueError('invalid_app_inventory'),method,'malformed-reply')
         return {a['id'] for a in apps}
 
     @staticmethod
@@ -563,7 +606,7 @@ class LocalDevice:
 
     def clean_remove(self, record, save):
         """Full removal using current support, old snapshots and original locks."""
-        from clean_removal import locks, routes, remove_packages, restore_registrations, validate_restored_root_api, boot_format, verified_restart
+        from clean_removal import locks, routes, remove_packages, restore_registrations, validate_restored_root_api, boot_format, verified_restart, cleanup_step
         import deploy, provision, startup_hook
         roots=(ROOT,UPDATER,SUPERVISOR)
         uid=self.ownership.store.uid
@@ -597,7 +640,7 @@ class LocalDevice:
                 latest=record['fenced_components']['deploy'] or {}
                 from clean_removal import PRE_ACTIVATION
                 record['routing_never_applied']=(latest.get('stage') in PRE_ACTIVATION and not any(
-                    os.path.lexists(ROOT/name) for name in ('profile-trial.json','persistent-intent.json','persistent-binding.json',
+                    os.path.lexists(ROOT/name) for name in ('profile-trial.json','persistent-intent.json','persistent-binding.json','boot-continuation.json',
                         'home-backend.json','c1-gate','c1-keyfilter')))
                 self.ownership.store.write('clean-removal-'+record['operation'],record)
                 # Original journals remain immutable in the coordinator receipt.
@@ -612,36 +655,53 @@ class LocalDevice:
             startup_failed=bool(record.get('cleanup_startup_unavailable')) and not restarted
             if 'controls-restored' not in record['done']:
                 save('original-writers-fenced')
-                self.preserve_routing_inverse(record)
+                with cleanup_step('routing-inverse'):
+                    self.preserve_routing_inverse(record)
+                if 'profileless_cleanup_eligible' not in record:
+                    from clean_removal import ROUTING_EVIDENCE
+                    backup=self.ownership.store.read('routing-backup-'+record['operation'])
+                    # Capture before restoration can consume inverse records.
+                    # Older failed removals already retained their routing backup.
+                    record['profileless_cleanup_eligible']=(isinstance(backup,dict)
+                        and not any(name.split('/')[0] in ROUTING_EVIDENCE for name in backup)
+                        and not any(os.path.lexists(ROOT/name) for name in ROUTING_EVIDENCE)
+                        and not os.path.lexists('/var/webos-profile/override/clean-your-tv-root.json')
+                        and record.get('routes') is None)
+                    save('original-writers-fenced')
                 if os.path.lexists(ROOT):
                     # Current verified runtime reads old state as data. Guardian,
                     # key-up and emergency restoration execute before unregister.
                     program=('import sys,json;sys.path.insert(0,'+repr(str(self.payload/'root-updater'))+');'
                              'from clean_removal import runtime_restore;'
                              'print(json.dumps(runtime_restore('+repr(str(self.payload/'root'))+')))')
-                    restored=deploy.command([sys.executable,'-I','-B','-c',program])
-                    if restored.get('result') not in ('restored','absent'):raise ValueError('controls_restore_unverified')
+                    with cleanup_step('runtime-restore'):
+                        restored=deploy.command([sys.executable,'-I','-B','-c',program])
+                        if restored.get('result') not in ('restored','absent'):raise ValueError('controls_restore_unverified')
                     snapshot=read_journal(ROOT/'ls2-provision-snapshot.json')
                     if snapshot is not None:
                         self.ownership.store.write('owner-backup-'+record['operation'],{'provision':snapshot})
-                        provision.rollback(restored=restored)
-                        provision.refresh()
+                        with cleanup_step('provision-rollback'):
+                            provision.rollback(restored=restored)
+                            provision.refresh()
                     else:
                         if any(os.path.lexists(ROOT/name) for name in ('recovery-provision.json','recovery-provision.pending.json')):
                             raise ValueError('provision_snapshot_required')
-                        startup_hook.remove(provision.secure)
+                        with cleanup_step('startup-hook'):
+                            startup_hook.remove(provision.secure)
                 # Restore supervisor lockdown before Root updater's original
                 # registration. Admit only its authenticated original/installed/
                 # restored-SDK chain, never foreign drift.
                 if os.path.lexists(SUPERVISOR/'legacy-lockdown.json'):
                     from cleanup_system_updater import lockdown, write
-                    entries=lockdown(SUPERVISOR,BUS,check=lambda files:validate_restored_root_api(files,BUS,UPDATER,uid))
-                    for name,entry in entries.items():write(Path(name),entry['original'].encode(),entry['mode'])
+                    with cleanup_step('legacy-lockdown'):
+                        entries=lockdown(SUPERVISOR,BUS,check=lambda files:validate_restored_root_api(files,BUS,UPDATER,uid))
+                        for name,entry in entries.items():write(Path(name),entry['original'].encode(),entry['mode'])
                 for state,app,hookname in ((SUPERVISOR,'com.cleanyourtv.system.updater','52-clean-your-tv-system-updater'),
                                           (UPDATER,'com.cleanyourtv.root.updater','51-clean-your-tv-root-updater')):
                     if not os.path.lexists(state):continue
-                    restore_registrations(state,app,BUS,uid)
-                    startup_hook.remove_link(provision.secure,state,INIT/hookname,app,startup_hook.owned_legacy(app,state))
+                    with cleanup_step('registration-restore'):
+                        restore_registrations(state,app,BUS,uid)
+                        startup_hook.remove_link(provision.secure,state,INIT/hookname,app,startup_hook.owned_legacy(app,state))
                 unavailable=set(record.get('cleanup_startup_unavailable',[]))
                 for app,service in (('com.local.nativehome','com.local.nativehome.service'),
                                     ('com.gathin.tvhome','com.gathin.tvhome.renewal')):
@@ -670,9 +730,20 @@ class LocalDevice:
                         save('original-writers-fenced')
                 # Existing precise legacy permission remover restores its own
                 # original bytes. No blanket routing setter is used.
-                self.cleanup('legacy_permissions')
-                record['routes']=routes(self,record)
+                with cleanup_step('legacy-permissions'):
+                    self.cleanup('legacy_permissions')
+                with cleanup_step('home-readback'):
+                    record['routes']=routes(self,record)
                 record['done'].append('controls-restored');save('controls-restored')
+            # Recheck before destructive work: a retry must not erase newly
+            # appeared routing evidence and then use its absence as proof.
+            if isinstance(record.get('routes'),dict) and record['routes'].get('mode')=='stock-compositor':
+                if not self.compositor_stock_eligible(record) or routes(self,record)!=record['routes']:
+                    raise ValueError('routing_evidence_changed')
+            if (record.get('routing_never_applied') is True
+                    and record.get('profileless_cleanup_eligible') is True
+                    and not self.routing_untouched(record)):
+                raise ValueError('routing_evidence_changed')
             self.remove_owned_registrations()
             stopped=self.shared_cleanup('stop',record)
             if (stopped.get('controller_running') or startup_failed) and restarted:
@@ -709,7 +780,8 @@ class LocalDevice:
             if not verified_restart(record):record['cleanup_verified_boot_id']=current_boot
             if 'private-cleanup' not in record['done']:record['done'].append('private-cleanup')
             save('private-cleanup')
-        return {'removed':True,'verified_clean':True,'applications_services_startup_removed':True,'private_cleanup_verified':True}
+        return {'removed':True,'verified_clean':True,'applications_services_startup_removed':True,'private_cleanup_verified':True,
+                'temporary_files_retained':bool(record.get('retained_temporary_stages'))}
 
     def remove_owned_registrations(self):
         devices=self.rpc('com.webos.service.eim/getAllInputStatus',{}).get('devices')
@@ -717,7 +789,8 @@ class LocalDevice:
         if any(item.get('id')=='com.gathin.tvhome' or item.get('appId')=='com.gathin.tvhome' for item in devices):
             if self.rpc('com.webos.service.eim/deleteDevice',{'appId':'com.gathin.tvhome'}).get('returnValue') is not True:
                 raise ValueError('owned_input_registration_remains')
-        activities=self.rpc('com.palm.activitymanager/list',{'details':True,'subscribers':True,'current':False,'internal':False}).get('activities')
+        from clean_removal import activities as read_activities
+        activities=read_activities(self)
         if not isinstance(activities,list):raise ValueError('activity_readback_unverified')
         own={'com.local.nativehome.boot':'luna://com.local.nativehome.service/tick',
              'com.gathin.tvhome.renewal.hourly':'luna://com.gathin.tvhome.renewal/tick',
@@ -757,13 +830,13 @@ class LocalDevice:
             'recovery-failure.json','run-recovery-service','recovery-service.json','bootstrap.pid',
             'activity-registration.json','startup-hook.json','startup-hook.previous.json',
             'profile-trial.json','profile-trial.lock','persistent-intent.json','persistent-intent.lock',
-            'persistent-binding.json','profile-guardian-ready.json','profile-recovery.log',
+            'persistent-binding.json','boot-continuation.json','profile-guardian-ready.json','profile-recovery.log',
             'profile-candidate.stage','native-input.json','software-update.lock','update-block.json',
             'update-home-cancel.json','update-home-resume.json','session.lock','boot-dispatch.lock',
             'startup-policy.json','startup-policy.lock','health.log','audio','failsafe',
             'home-backend.json','c1-gate','c1-keyfilter','personalization.json','personalization',
             'state','ssap.json','apps.json','config.json','firmware-permissions.json',
-            'theme-receiver-permissions.json','wallpaper-media-permissions.json','audio-recovery',
+            'theme-receiver-permissions.json','wallpaper-media-permissions.json','weather-permissions.json','audio-recovery',
             'boot-decision.json','session.json','persistent-operation.lock','profile-guardian.log',
             'emergency.log','escape-ready.json','permissions','firmware-permissions.lock','system-permissions.json'}
         updater_allowed={'code','cache','profiles','run-service','python-launcher','python-runtime.json',
@@ -943,6 +1016,22 @@ class LocalDevice:
             elif path.name.startswith('cytv-system-updater-'):
                 manifest=self.system_setup().verify_bundle(path)
                 allowed={name.split('/')[0] for name in manifest['files']}|{'bundle.json'}
+                retain=bool(names-allowed-{'__pycache__'})
+                if '__pycache__' in names:
+                    cache=checked_store(path/'__pycache__',uid);cached=cache._directory()
+                    try:bytecode=os.listdir(cached)
+                    finally:os.close(cached)
+                    sources=[name[:-3] for name in manifest['files'] if '/' not in name and name.endswith('.py')]
+                    for name in bytecode:
+                        if not any(re.fullmatch(re.escape(source)+r'\.cpython-[0-9]{2,3}(?:\.opt-[12])?\.pyc',name) for source in sources):
+                            retain=True
+                        else:safe_bytes(path/'__pycache__'/name,uid=uid)
+                    allowed.add('__pycache__')
+                if retain:
+                    entry={'path':str(path),'dev':info.st_dev,'ino':info.st_ino}
+                    retained=record.setdefault('retained_temporary_stages',[])
+                    if entry not in retained:retained.append(entry)
+                    continue  # Inert unknown temporary data must not strand removal.
             else:
                 # Unrecorded gate-only staging has no product metadata and is
                 # not classified from its name or ELF header alone.
@@ -959,6 +1048,42 @@ class LocalDevice:
             retire_tree(path,set(item['allowed']),uid=uid)
 
 
+    def routing_untouched(self, record):
+        """Prove absence of CYTV routing effects, independently of firmware APIs."""
+        from clean_removal import PRE_ACTIVATION, ROUTING_EVIDENCE
+        deploy=(record.get('fenced_components') or {}).get('deploy') or {}
+        if (record.get('routing_never_applied') is not True
+                or record.get('profileless_cleanup_eligible') is not True
+                or deploy.get('stage') not in PRE_ACTIVATION):return False
+        backup=self.ownership.store.read('routing-backup-'+record['operation'])
+        return (isinstance(backup,dict)
+            and not any(name.split('/')[0] in ROUTING_EVIDENCE for name in backup)
+            and not any(os.path.lexists(ROOT/name) for name in ROUTING_EVIDENCE)
+            and not os.path.lexists('/var/webos-profile/override/clean-your-tv-root.json'))
+
+    def compositor_stock_eligible(self, record):
+        from clean_removal import ROUTING_EVIDENCE
+        retained_proof=isinstance(record.get('routes'),dict) and record['routes'].get('mode')=='stock-compositor'
+        if (record.get('profileless_cleanup_eligible') is not True or
+                not retained_proof and (self.payload is None or not (self.payload/'root/runtime/c1_keyfilter.py').is_file())):return False
+        backup=self.ownership.store.read('routing-backup-'+record['operation'])
+        return (isinstance(backup,dict)
+            and not any(name.split('/')[0] in ROUTING_EVIDENCE for name in backup)
+            and not any(os.path.lexists(ROOT/name) for name in ROUTING_EVIDENCE)
+            and not os.path.lexists('/var/webos-profile/override/clean-your-tv-root.json'))
+
+    def compositor_stock(self, record):
+        import deploy
+        if self.payload is None:
+            result=subprocess.run(['/usr/bin/node',str(Path(__file__).parent/'cleanup_tail.js'),
+                'stock-proof',record['operation'],'-','-1','-1','-1','-',record['removal']],
+                check=True,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=90)
+            return json.loads(result.stdout)['routes']
+        program=('import sys,json;sys.path.insert(0,'+repr(str(self.payload/'root-updater'))+');'
+                 'from clean_removal import compositor_stock;'
+                 'print(json.dumps({"returnValue":True,"result":compositor_stock('+repr(str(self.payload/'root'))+')}))')
+        return deploy.command([sys.executable,'-I','-B','-c',program])['result']
+
     def preserve_routing_inverse(self, record):
         # Exact finite data-only inverse records, captured before restore can
         # consume them. Credentials, executable trees and mutable preferences
@@ -966,10 +1091,11 @@ class LocalDevice:
         key='routing-backup-'+record['operation']
         if _optional_record(self.ownership.store,key) is not None:return
         backup={}
-        for name in ('profile-trial.json','home-backend.json','c1-gate/active',
+        for name in ('profile-trial.json','persistent-intent.json','persistent-binding.json','boot-continuation.json',
+                     'profile-candidate.stage','home-backend.json','c1-gate/active',
                      'c1-keyfilter/ownership.json','c1-keyfilter/pending.json',
                      'startup-hook.json','startup-hook.previous.json','system-permissions.json',
-                     'firmware-permissions.json','theme-receiver-permissions.json','wallpaper-media-permissions.json'):
+                     'firmware-permissions.json','theme-receiver-permissions.json','wallpaper-media-permissions.json','weather-permissions.json'):
             path=ROOT/name
             if os.path.lexists(path):backup[name]=safe_bytes(path,uid=self.ownership.store.uid).decode('utf-8')
         for prefix,root in (('root-updater',UPDATER),('system-updater',SUPERVISOR)):
@@ -1035,6 +1161,16 @@ class LocalDevice:
 
     def finish_clean_tail(self, record):
         """Transfer final runtime cleanup to Node with the same inherited flock."""
+        saved=_optional_record(self.ownership.store,'clean-removal-'+record['operation'])
+        current=self.ownership.status()
+        if saved and saved.get('final_fence') is not None:
+            # A completed destructive goal has no authority over later files.
+            # Its supported retry is the current coordinator/Node readback.
+            raise ValueError('completed_removal_readback_required')
+        if (not current or current['owner']!='clean-removal'
+                or current['journal']!='product-'+record['operation']+'.json'
+                or current['id']!=record['lease']):
+            raise ValueError('original_removal_required')
         import python_binding, fcntl
         from clean_removal import retire_tree
         runtime=python_binding.MANAGED_ROOT/python_binding.ARCHIVE_SHA256
@@ -1156,7 +1292,11 @@ class LocalDevice:
         from clean_removal import APPS, routes
         if self.apps().intersection(APPS):raise ValueError('project_apps_remain')
         for app in APPS:self.absent(app)
-        if routes(self,record)!=record.get('routes'):raise ValueError('restored_routes_changed')
+        current_routes=routes(self,record)
+        if current_routes!=record.get('routes'):
+            if current_routes!={'mode':'never-applied'}:raise ValueError('restored_routes_changed')
+            # Upgrade older pre-activation readbacks only with fresh no-effect proof.
+            record['routes']=current_routes
         for name in ('50-clean-your-tv-root','51-clean-your-tv-root-updater','52-clean-your-tv-system-updater'):
             if os.path.lexists(INIT/name):raise ValueError('startup_remains')
         for name in ('/var/luna-service2/manifests.d/com.cleanyourtv.root.preview.recovery.json',
@@ -1166,6 +1306,11 @@ class LocalDevice:
         if private['present']:raise ValueError('no_root_private_cleanup_required')
         for path in TEMP.iterdir():
             if SUPPORT_STAGE.fullmatch(path.name) and path!=self.payload:
+                if path.name.startswith('cytv-system-updater-'):
+                    fd=checked_store(path,self.ownership.store.uid)._directory()
+                    try:info=os.fstat(fd)
+                    finally:os.close(fd)
+                    if {'path':str(path),'dev':info.st_dev,'ino':info.st_ino} in record.get('retained_temporary_stages',[]):continue
                 if re.fullmatch(r'cytv-coordinator-[a-f0-9]{32}',path.name) and self.current_coordinator_stage(path):continue
                 if re.fullmatch(r'cytv-product-[a-f0-9]{32}',path.name) and self.current_product_stage(path):continue
                 fd=checked_store(path,self.ownership.store.uid)._directory()
@@ -1183,7 +1328,8 @@ class LocalDevice:
             allowed={'deploy.json','provision.lock'} if index==0 else {'bootstrap.json','daemon.lock','worker.lock'}
             os.close(checked_store(root,self.ownership.store.uid)._directory())
             if set(p.name for p in root.iterdir())-allowed:raise ValueError('private_members_remain')
-        activities=self.rpc('com.palm.activitymanager/list',{'details':True,'subscribers':True,'current':False,'internal':False}).get('activities')
+        from clean_removal import activities as read_activities
+        activities=read_activities(self)
         if (not isinstance(activities,list) or any(not isinstance(item,dict)
                 or item.get('name')=='com.cleanyourtv.root.preview.service.recovery'
                 or str(item.get('callback',{}).get('method','')).startswith(tuple('luna://'+app+('.renewal/' if app=='com.gathin.tvhome' else '.service/') for app in APPS)) for item in activities)):

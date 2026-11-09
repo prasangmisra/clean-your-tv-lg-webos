@@ -12,14 +12,18 @@ def arguments(config, directory, identity=''):
     action = config.get('action', 'install')
     if action not in ('install', 'status', 'doctor', 'home-diagnostics', 'recover', 'restore', 'uninstall'):
         raise ValueError('Unsupported Android operation')
-    profile = state.target(config.get('host', ''), config.get('edition', ''), config.get('port'))
+    profile = state.target(config.get('host', ''), config.get('edition', ''), config.get('port'),
+                           connection=config.get('connection'), root_variant=config.get('root_variant'))
     language = config.get('language', 'ru')
     if language not in i18n.LANGUAGES or language == 'auto':
         raise ValueError('Unsupported Android language')
     result = [action, '--host', profile['host'], '--edition', profile['edition'],
               '--port', str(profile['port']), '--no-discovery', '--language', language,
               '--data-dir', str(directory)]
-    if identity and profile['edition'] == 'root':
+    for field in ('connection', 'root_variant'):
+        if profile.get(field):
+            result += ['--'+field.replace('_','-'), profile[field]]
+    if identity and (profile['edition'] == 'root' or profile.get('connection') == 'root-ssh'):
         result += ['--identity', str(identity)]
     return result
 
@@ -110,6 +114,10 @@ class AndroidConsole(Console):
         self.recovery_plan({'state': 'review', 'summary': 'Review recovery options',
                             'next_step': 'Recovery data kept. Installation has not restarted.'})
 
+    def selected_profile(self, profile):
+        self.callbacks.emit(kind='selected-profile', profile={key:profile[key] for key in
+                            ('host','edition','port','connection','root_variant') if key in profile})
+
     def recovery_plan(self, value):
         super().recovery_plan(value)
         from cytv.recovery_ui import removal_details, removal_restart_required
@@ -119,8 +127,10 @@ class AndroidConsole(Console):
         optional['restart_required'] = removal_restart_required(value)
         if type(value.get('actions')) is list:
             optional['actions'] = [item for item in value['actions'] if type(item) is str and item in ACTIONS]
-        if type(value.get('reason')) is str and value['reason'] in REASONS:
-            optional['reason'] = value['reason']
+        removal = value.get('removal') if type(value.get('removal')) is dict else {}
+        reason = value.get('reason', removal.get('reason'))
+        if type(reason) is str and reason in REASONS:
+            optional['reason'] = reason
         detail = removal_details(value)
         if detail:
             optional.update(stageText=i18n.translate(detail['stage_text']), blockerText=i18n.translate(detail['blocker_text']))
@@ -190,7 +200,8 @@ def inspect_root_recovery(config, callbacks, payload=None):
             return 2 if store.pending(profile) else 0
         return root_passive.inspect_saved(store,profile,pending.get('product_operation'),callbacks.secret,after_observe=review)
     except (EOFError, KeyboardInterrupt):
-        write(KEPT)
+        from cytv.recovery import cancelled
+        cancelled(write, store, profile, 'recover', 'recover')
         return 130
     except Exception as error:
         from cytv.failure_help import for_error

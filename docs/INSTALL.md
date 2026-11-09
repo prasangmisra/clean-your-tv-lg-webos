@@ -1,8 +1,13 @@
 # Install Clean Your TV
 
-> **Release 1.9.0:** see [versions, tested scope and recovery limits](RELEASE-1.9.0.md). C1 Beta is fresh-install only, selected automatically in the common installer; normal OTA is unavailable and physical C1 acceptance is pending. Historical results below retain their original artifact scope.
+Unreleased: The installer asks for a TV name, default **Home**; scripts can use `--tv-name "Aashiyaan"`. After upgrading an older installation, **Settings → Home → TV name** is available automatically. Save a new name or reset to Home at any time. A saved name survives restart and supported updates; existing settings remain intact. Names allow up to 48 characters. This controls the launcher and its own loading display, not the network name. LG’s earlier loading label may require applying the name through the installer.
 
-> The [1.7.1 maintenance release](RELEASE-1.7.1.md) changes the host installer and browser demo; TV component versions remain those of 1.7.0. See the [1.7.0 device observations and limits](history/2026-11-03-release-1.7.0-final-packages.md). Obtain available packages from [GitHub Releases](https://github.com/Razdva122/clean-your-tv-lg-webos/releases).
+> **Shared experimental compositor backend:** the installer selects this
+> backend for ordinary Root and Root Beta by verified capabilities, without an
+> SDK/model allowlist. It requires fresh setup, confirmed absence of System Profile,
+> stock ARM32 native LG Home, vendor Qt filters and compatible emergency input and
+> recovery. Conflicting Home integrations are left untouched. Experimental OTA is
+> disabled; physical compatibility remains unconfirmed. See [scope and recovery](development/C1-NATIVE-GATE.md#unpublished-capability-based-compositor-admission-364).
 
 Use **cytv** to install No-root or Root. It includes the computer runtime and TV
 packages; no source build is needed. After setup, the computer can be switched off.
@@ -20,10 +25,15 @@ Root setup does not obtain root or flash firmware. Do not enable Developer Mode
 over an existing rooted setup, or run Root routing and No-root Helper together.
 [Compare everyday controls and limits](EDITIONS.md).
 Normal profile-based Root also requires working Settings Service and System Profile
-Home interfaces (`com.webos.service.systemprofile`). Eligible C1 TVs use the separate,
-fresh-install-only [C1 Beta backend](development/C1-NATIVE-GATE.md), which does not
-require those interfaces and has no physical C1 acceptance or normal OTA support.
+Home interfaces (`com.webos.service.systemprofile`). The installer's
+shared [compositor backend](development/C1-NATIVE-GATE.md) supports ordinary Root
+and exact-Node-0.12.2 Root Beta only when System Profile absence and all native
+Home/input/recovery requirements are verified. A KeyFilters field alone is
+insufficient; old in-compositor LG panels remain unsupported. This fresh-install
+experimental path still has no target-TV physical acceptance or normal OTA support.
 Root access alone does not establish compatibility.
+
+If No-root was installed again after full removal, switching to Root may require cleanup first. Back up Home preferences, choose **Uninstall Clean Your TV** with the saved Root connection and wait for verified removal. This also removes No-root Home and Helper. Then install Root; keep recovery records.
 
 ## 2. Prepare your TV and computer
 

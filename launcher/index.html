@@ -6,6 +6,7 @@
     </script>
     <meta charset="utf-8" />
     <title>Home</title>
+    <link rel="stylesheet" href="tv-name.css" />
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="theme-defaults.css" />
     <link rel="stylesheet" href="renewal-panel.css" />
@@ -14,8 +15,15 @@
     <link rel="stylesheet" href="theme-panel.css" />
     <link rel="stylesheet" href="wallpaper.css" />
     <link rel="stylesheet" href="wallpaper-panel.css" />
+    <link rel="stylesheet" href="weather.css" />
   </head>
   <body>
+    <div id="tvNameLoading" role="status">
+      <h1 id="tvNameLoadingTitle">Home</h1>
+      <p data-i18n="Loading…">Loading…</p>
+    </div>
+    <script src="tv-name-config.js"></script>
+    <script src="tv-name.js"></script>
     <div id="homeSurface" class="ctv-home ctv-starting">
       <!-- Ambient glow in the colour of the focused dock app; two layers so colours crossfade. -->
       <div id="ambientA" class="ambient ctv-ambient"></div>
@@ -102,6 +110,7 @@
     <script src="config.js"></script>
     <script src="i18n.js"></script>
     <script src="catalogs.js"></script>
+    <script src="tv-name-locales.js"></script>
     <script src="apps.js"></script>
     <script src="app-library.js"></script>
     <script src="input-sources.js"></script>
@@ -125,6 +134,11 @@
     <script src="update-panel.js"></script>
     <script src="wallpaper-locales.js"></script>
     <script src="wallpaper-panel.js"></script>
+    <script src="weather-locales.js"></script>
+    <script src="weather-data.js"></script>
+    <script src="weather-icons.js"></script>
+    <script src="weather-transport.js"></script>
+    <script src="weather.js"></script>
     <script src="settings-categories.js"></script>
     <script src="renewal-panel.js"></script>
     <script src="helper-control.js"></script>

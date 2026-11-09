@@ -1,5 +1,9 @@
 # Clean Your TV — guía de uso
 
+el instalador pide un nombre, **Home** por defecto; CLI: `--tv-name "Aashiyaan"`. Al actualizar una instalación antigua aparece automáticamente **Ajustes → Home → Nombre del televisor**. Puedes guardarlo o restablecer Home cuando quieras. Se conserva al reiniciar y en actualizaciones compatibles, junto con los demás ajustes. Máximo 48 caracteres. Cambia el lanzador y su carga, no el nombre de red. La pantalla anterior de LG puede requerir el instalador.
+
+Cambio del instalador aún no publicado: antes de una nueva instalación, el instalador del ordenador busca una versión estable más reciente en GitHub. Elige «Abrir GitHub y descargar la última versión» para detenerte y descargarla, o «No, instalar esta versión» para continuar explícitamente. Si falla la comprobación, puedes continuar. Las operaciones pendientes y la recuperación omiten esta comprobación.
+
 Clean Your TV ofrece una pantalla de inicio personal para tu LG webOS: tus aplicaciones en tu orden, sin filas patrocinadas en este menú. Instálalo desde un ordenador o teléfono Android; después puedes apagar el ordenador.
 
 ## 1. Descarga el instalador
@@ -22,6 +26,10 @@ Enciende el TV y conéctalo a la misma red doméstica que el ordenador o teléfo
 
 - **No-root** — si no tienes acceso root. Prepara Developer Mode siguiendo los pasos de abajo.
 - **Root** — si ya tienes acceso root por SSH. El instalador no obtiene root. No actives Developer Mode en ese TV; conserva el acceso SSH y los datos de recuperación.
+
+Para Root, el instalador comprueba y selecciona un método disponible para controlar Home. Si no puede verificar la compatibilidad, la instalación se detiene; no omitas la comprobación fallida.
+
+**No-root → Root:** Si volvió a instalar No-root después de una eliminación completa, cambiar a Root puede requerir una limpieza previa. Guarde las preferencias de Home, elija **Desinstalar Clean Your TV** con la conexión Root guardada y espere la eliminación verificada. Esto también elimina Home y Helper de No-root. Luego instale Root; conserve los registros de recuperación.
 
 ### Configurar Developer Mode (No-root)
 
@@ -58,6 +66,8 @@ El asistente de escritorio usa inicialmente el idioma del sistema y guarda una s
 3. No-root: introduce el código de Developer Mode y acepta la solicitud en el TV. Root: usa tus credenciales SSH. Acepta una nueva identidad SSH solo para tu propio TV en una red de confianza. Si cambia una clave guardada, detente e investiga.
 4. Sigue el asistente. Mantén el TV encendido, la misma red y CYTV abierto hasta que termine. No fuerces el cierre de la app Android. Root activa el control de Home justo después de preparar la recuperación.
 
+La instalación Root continúa con un aviso si no se pueden leer las entradas del TV pero la lista de aplicaciones es válida. Pueden faltar entradas en Home; una lista de aplicaciones fallida o vacía sigue deteniendo la instalación. Guarda el informe de diagnóstico si el aviso persiste.
+
 ## 5. Comprueba el mando
 
 1. Abre otra app del TV y pulsa brevemente **Home**. Debe abrirse Clean Your TV. Indica al asistente lo que viste; omite la prueba si no la hiciste.
@@ -67,13 +77,19 @@ El asistente de escritorio usa inicialmente el idioma del sistema y guarda una s
 
 ## 6. Uso y recuperación
 
+Compatibilidad IR de No-root: al soltar Home tras una pulsación breve, Clean se programa para unos 700 ms después; LG Home puede aparecer primero. Mantener Home sigue correspondiendo a webOS y tres pulsaciones siguen deteniendo Helper. El acceso con Developer Mode normal no está verificado; no cambie los permisos de entrada.
+
 Las flechas seleccionan y OK abre; mantén OK para reordenar. Una pulsación breve de Atrás conserva la navegación y confirmación de salida de cada aplicación. Home abre el lanzador mientras el control está activo. Mantén Atrás durante 1,2 segundos para abrir LG Home una vez. El interruptor de control de Home y tus ajustes no cambian.
 
 **Pulsa Home tres veces en dos segundos**, soltando entre pulsaciones. Se recupera LG Home y se detiene el control sin borrar preferencias.
 
 No-root: Para reiniciar el control de Home, abre Home Helper, elige Iniciar Helper y confirma. Se conserva tu pantalla Home elegida. Root: activa **Cambiar Home** en los ajustes de Home para reanudar. **Abrir LG Home** lo abre una vez sin cambiar el destino de Home. Para recuperar LG Home como destino permanente, desactiva **Cambiar Home**. No ejecutes ambos controladores a la vez. Si el fallo se repite, deja LG Home activo.
 
+Una actualización no reinicia un Helper No-root detenido. Reanúdalo explícitamente como se indica arriba; no borres manualmente los marcadores de parada.
+
 ## ¿Necesitas ayuda?
+
+Si aparece `ssh-identity-changed` tras un reinicio de fábrica o un cambio de SSH, detente: CYTV bloqueó la clave guardada modificada antes de autenticar. La confirmación inicial de confianza no la reemplaza; una desinstalación pendiente no explica la discrepancia. Conserva el perfil original, las claves y los registros de recuperación. No hay un comando automático compatible para renovar la confianza. Se requieren una verificación independiente de la identidad/huella del TV y un procedimiento revisado que conserve el perfil: [recuperación de identidad SSH](../RECOVERY.md#ssh-identity-changed).
 
 Si se interrumpe la instalación, usa la misma conexión guardada y comienza por **Comprobar estado del TV**. Continúa solo mediante la recuperación que ofrezca el asistente. Si el estado es desconocido, guarda el informe de diagnóstico y detente; conserva los datos de recuperación y no repitas la instalación a ciegas.
 
@@ -83,13 +99,19 @@ Indica modelo, firmware, No-root o Root, dispositivo de instalación, paso y men
 
 [Informar de un problema](../FEEDBACK.md) · [Recuperación — inglés](../RECOVERY.md) · [Actualizar o eliminar — inglés](../MAINTENANCE.md) · [Otros idiomas](../LANGUAGES.md)
 
-En las próximas compilaciones, el aviso y el botón «Desactivar vista previa HDMI» solo aparecen con 4K seleccionado o activo en temas con la vista previa de entradas activada. Durante la vista previa HDMI, el fondo de vídeo 4K se sustituye temporalmente por una imagen estática de 1080p. Desactiva la vista previa de entradas para mantener el fondo en 4K.
+### Eliminación sencilla
 
-### Candidato: eliminación sencilla
+Elige **Desinstalar Clean Your TV** en Mantenimiento con la misma conexión guardada. Confirma una vez. Se eliminan las apps y archivos conocidos del proyecto que estén presentes y se omiten los ausentes, incluso después de una instalación parcial.
 
-Los botones anteriores siguen ofreciendo la versión publicada. En el próximo candidato, elige **Desinstalar Clean Your TV** en Mantenimiento con la misma conexión guardada. Confirma una vez. Se eliminan las apps y archivos conocidos del proyecto que estén presentes y se omiten los ausentes, incluso después de una instalación parcial.
+En televisores antiguos sin una aplicación LG Home independiente, la eliminación de No-root puede cambiar a TV en directo. Mantenga el televisor encendido y reinícielo si se solicita; no borre los datos de recuperación ni restablezca el televisor.
 
 Cuando se indique, desconecta la alimentación del TV, vuelve a conectarla, espera la red y elige **Intentar de nuevo**. Espera o Quick Start no es un reinicio completo; CYTV no reinicia el TV automáticamente. Si se pierde la conexión, compruébala y reintenta la misma eliminación sin otro asistente de recuperación. Si se deniega el acceso, usa la conexión Root solicitada; si el TV está ocupado, espera y reintenta. Solo se muestra éxito tras verificar la limpieza final. Conserva las claves y los informes originales. Siguen vigentes los controles de emergencia y el consentimiento para compartir.
+
+Una instalación fallida o interrumpida ofrece recuperación directamente. Si No-root no puede continuar, confirma la eliminación completa una vez. La eliminación realiza hasta tres intentos ante cortes temporales de conexión o un proceso CYTV ocupado. Si requiere Root, elige **Conectar con Root** para el mismo TV; la limpieza Root verificada también completa su eliminación No-root bloqueada. Si falla la activación Root, CYTV intenta restaurar y verificar LG Home sin repetir la activación. Cancelar trabajo pendiente conserva el informe y las acciones de recuperación. Se mantiene la parada de emergencia.
+
+Si falla la conexión durante la eliminación, abre sus detalles, comprueba la red o elige una clave SSH Root existente y reintenta. La dirección, edición, puerto y verificación de la clave del TV siguen fijados. No-root comprueba Helper antes del emparejamiento: detenlo y confirma la nueva comprobación sin reiniciar el proceso. Solo un TV vacío verificado y sin instalación pendiente puede omitir el reinicio; tras una eliminación real sigue siendo necesario el reinicio solicitado. Si falla el servicio de entradas, continúa la limpieza segura de paquetes; el éxito exige verificar también la limpieza del acceso directo.
+
+**Reinstalar Root:** Elige **Configurar mi televisor → Root** con la conexión guardada y confirma **¿Reinstalar Root?**. El instalador restaura LG Home y elimina por completo Clean Your TV, incluidos sus actualizadores, Home Helper y las preferencias guardadas. Tras verificar la eliminación, instala y activa los paquetes y el entorno Root incluidos en ese instalador. Se conservan las demás apps del TV y el acceso root/SSH existente. Si la eliminación se detiene o pide un reinicio completo, termínala antes de iniciar otra vez la configuración. **Desinstalar Clean Your TV** por sí solo nunca inicia otra instalación.
 
 <!-- Legacy anchors retained for existing links. Detailed references: -->
 <a id="python-opcional-para-root-en-v110"></a>
@@ -109,3 +131,17 @@ Cuando se indique, desconecta la alimentación del TV, vuelve a conectarla, espe
 <a id="espacio-de-almacenamiento"></a>
 
 Referencias detalladas en inglés: [requisitos](../COMPATIBILITY.md) · [controles](../CONTROLS.md) · [temas](../THEMES.md) · [actualizaciones](../UPDATES.md).
+
+<a id="candidato-unreleased-nodejs-antiguo-en-el-tv"></a>
+<a id="nodejs-antiguo-en-el-tv-publicado-en-v1120"></a>
+<a id="eliminación-sencilla-v1110"></a>
+
+## Tiempo
+
+Abra Ajustes → Tiempo, debajo de Fondos. Active el tiempo y abra Ciudad para buscar y elegir la región y el país correctos, o seleccione Automático para obtener una ciudad aproximada según su conexión. Una VPN puede cambiar el resultado; si falta la ciudad o es incorrecta, use la búsqueda manual. La ciudad detectada o elegida aparece en ajustes. Elija °C / m/s o °F / mph y un formato disponible: breve, actual, detallado o cuatro días. La vista previa sigue el tema; Ejemplo indica datos de muestra. Liquid Glass solo admite el formato breve. Ribbon y Atmosphere no muestran el tiempo. Desactivarlo detiene las solicitudes y oculta ciudad, unidades y formato; la selección de fuente sigue disponible. Durante un fallo pueden mantenerse datos recientes temporalmente; después se ocultan hasta poder actualizarlos.
+
+Elija la fuente del pronóstico: Auto, MET Norway u Open-Meteo. Auto empieza con MET Norway, prueba Open-Meteo una vez si falla y después reutiliza la última fuente que funcionó y su caché. La selección manual nunca cambia de fuente automáticamente. Los ajustes nuevos usan Auto; los guardados sin fuente conservan Open-Meteo. Se muestra la fuente real. La disponibilidad depende de la red. La aplicación consulta MET como máximo una vez cada tres horas; la caché caduca a las seis horas. Los campos ausentes se ocultan: MET no ofrece sensación térmica ni probabilidad de precipitación. Los rangos diarios resumen puntos del pronóstico, no extremos medidos.
+
+Las coordenadas se envían a api.met.no o api.open-meteo.com y las búsquedas de ciudades a geocoding-api.open-meteo.com. La ubicación automática opcional transmite la IP pública a get.geojs.io. Las conexiones usan HTTPS; no hace falta una clave API. La ubicación, fuente y caché se guardan en el televisor. Fuentes de datos incluye condiciones y créditos, como el Instituto Meteorológico Noruego (MET Norway, CC BY 4.0).
+
+El botón Fuentes de datos del encabezado Tiempo abre la información de servicios y licencias.

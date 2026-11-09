@@ -19,22 +19,28 @@ A good title is **Installation result: TV model / firmware / edition**.
 Use the [installation result form](https://github.com/Razdva122/clean-your-tv-lg-webos/issues/new?template=installation-result.yml).
 For an existing problem, add new evidence to its issue instead of opening a duplicate.
 
-## Unreleased installer diagnostic context
+<a id="unreleased-installer-diagnostic-context"></a>
+
+## Installer diagnostic context
 
 Save the report from the original failed attempt before running another check.
-Upcoming installers retain a recorded first error separately from later status
+Current installers retain a recorded first error separately from later status
 errors and include checklist results plus a filtered Doctor/status summary.
 Successful setup, status and restore also offer a report. Older failures cannot
 be reconstructed retroactively; missing primary evidence is explicitly marked.
 Known TV and CYTV versions are included when readable; supply missing details
 from TV settings without posting a serial number. A successful Doctor check is
-not confirmation that installation or physical Home works. These changes are not
-in v1.5.4. [Fields and limits](development/INSTALLER-DIAGNOSTICS.md).
+not confirmation that installation or physical Home works. Older releases such as v1.5.4 lack this diagnostic context. [Fields and limits](development/INSTALLER-DIAGNOSTICS.md).
 
 ## Keep private data private
 
-Review a draft before posting. Prefer the installer's redacted diagnostic summary
-and a few relevant lines over a full log. Remove SSH/SSAP keys, passphrases,
+The installer's standard **Save diagnostic report** export is already redacted.
+When requesting it, ask the reporter to save and attach the report without adding
+a privacy warning or manual redaction checklist.
+
+Agents must still review evidence before publishing it. For raw logs, manually
+assembled summaries and other nonstandard attachments, review a draft before
+posting. Prefer a few relevant, redacted lines over a full log. Remove SSH/SSAP keys, passphrases,
 pairing tokens, IP/MAC addresses, SSIDs, serial numbers, app inventories, private
 paths, screenshots with personal content and recovery backups. A filename saying
 “diagnostic” does not guarantee that its contents are safe to share.

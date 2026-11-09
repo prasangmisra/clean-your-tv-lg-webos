@@ -81,7 +81,12 @@ def source_bundle(installer):
     data = {'bundle.json': raw}
     for name in manifest['files']:
         data[name] = read(name)
-    validate_bundle(data, resolution)
+    _, release = validate_bundle(data, resolution)
+    if release.get('runtime_variant') != installer.profile.get('root_variant'):
+        raise ValueError('Home backend runtime does not match the selected Root variant')
+    if installer.tv_info.get('home_backend_schema') == 3 and (
+            release.get('routing') != 'compositor-keyfilter-v1' or release.get('compositor_admission') != 3):
+        raise ValueError('Generic compositor admission requires a matching mount-free payload')
     return data
 
 
@@ -122,7 +127,7 @@ def install(installer, inventory, migrate=False, reinstall=None):
     This host path never stages a normal updater or retries a failed native setup.
     """
     if migrate or reinstall is not None:
-        raise UserError('C1 native Home setup requires a fresh installation without migration. Existing recovery data was kept.')
+        raise UserError('Experimental Home setup requires a fresh installation without migration. Existing recovery data was kept.')
     if installer.store.pending(installer.profile):
         raise UserError('Previous operation is unresolved. Run cytv status or cytv restore; do not retry installation.', reason_code='pending-operation')
     try:
@@ -131,26 +136,40 @@ def install(installer, inventory, migrate=False, reinstall=None):
             bundle = Path(folder)/'root';bundle.mkdir()
             for name, raw in data.items():
                 path = bundle/name;path.parent.mkdir(parents=True, exist_ok=True);path.write_bytes(raw)
-            package.personalize_root(bundle, inventory)
+            package.personalize_root(bundle, inventory, tv_name=getattr(installer, 'tv_name', None))
             prepared = {name: (bundle/name).read_bytes() for name in data}
             validate_bundle(prepared, installer.tv_info['graphics_resolution'])
     except (OSError, ValueError, KeyError, TypeError, AttributeError, EOFError, tarfile.TarError) as error:
-        raise UserError('C1 native Home packages are missing or invalid. Use a complete installer build. Installation has not started.') from error
+        raise UserError('Experimental Home packages are missing or invalid. Use a complete installer build. Installation has not started.') from error
     from . import storage
     storage.install(installer.remote, prepared, installer.progress, root=True)
-    installer.progress(NOTICE)
+    installer.progress('Experimental compositor Home: physical controls and power recovery are unverified.'
+                       if installer.tv_info.get('home_backend_schema') == 3 else NOTICE)
     installer.store.begin(installer.profile, 'install', release_sha=digest(prepared['release.json']),
                           bundle_sha=digest(prepared['bundle.json']), migrate=False, requires_updater=False,
                           home_backend=BACKEND, stage='upload')
     installer.progress('Uploading Root and recovery runtime…')
-    stage = '/tmp/cytv-c1-root-'+uuid.uuid4().hex
-    installer.remote.run('umask 077; mkdir '+shlex.quote(stage))
-    for name, raw in prepared.items():
-        target = stage+'/'+name
-        installer.remote.run('mkdir -p '+shlex.quote(str(PurePosixPath(target).parent)))
-        installer.remote.upload(target, raw, mode=0o600)
-    installer.store.checkpoint(installer.profile, stage='setup')
-    result = installer.root_action('install', bundle=stage, experimental=True)
+    if getattr(installer,'_native_clean_install',False):
+        with tempfile.TemporaryDirectory(prefix='cytv-c1-root-') as folder:
+            bundle=Path(folder)/'root';bundle.mkdir()
+            for name,raw in prepared.items():
+                path=bundle/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+            stage=installer.upload_product(bundle)
+        operation=uuid.uuid4().hex
+        installer.store.checkpoint(installer.profile,stage='setup',product_operation=operation,product_payload=stage)
+        reply=installer.product_action('native-install',operation,stage)
+        if reply.get('state')!='complete':
+            raise UserError('Previous operation is unresolved. Run cytv status or cytv restore; do not retry installation.',reason_code='pending-operation')
+        result=reply.get('result')
+    else:
+        stage = '/tmp/cytv-c1-root-'+uuid.uuid4().hex
+        installer.remote.run('umask 077; mkdir '+shlex.quote(stage))
+        for name, raw in prepared.items():
+            target = stage+'/'+name
+            installer.remote.run('mkdir -p '+shlex.quote(str(PurePosixPath(target).parent)))
+            installer.remote.upload(target, raw, mode=0o600)
+        installer.store.checkpoint(installer.profile, stage='setup')
+        result = installer.root_action('install', bundle=stage, experimental=True)
     if (not isinstance(result, dict) or result.get('returnValue') is not True
             or result.get('installed') != package.ROOT_APP or result.get('home_changed') is not False):
         raise UserError('C1 installation was not confirmed. Keep recovery state and run cytv status.')

@@ -15,11 +15,29 @@ case in deterministic discovery order. Every discovered occurrence belongs to
 exactly one shard; new cases are included automatically. Existing repeated
 discovery of imported test classes is preserved, not silently deduplicated. Each shard keeps discovery
 order and unittest's class/module fixture handling. Shared fixtures run once per
-participating shard, so there is some extra setup cost. All other commands,
-including JS, native controls/watchdog, smaller Python suites and Linux ownership,
-run on shard 1. Browser and ARM Python validation retain their separate jobs.
+participating shard, so there is some extra setup cost. Serial blocks are assigned
+to the existing shards to avoid adding all their work to shard 1:
+
+| Shard | Serial checks, in addition to its Python partitions |
+| --- | --- |
+| 1 | UI/theme source checks, Android; fresh metadata and Linux ownership checks remain here |
+| 2 | Helper/TV compatibility, native controls/watchdog, Root service JS; Homebrew payload/bridge/UI/installer checks; preview |
+| 3 | Packaged Root legacy Node prototype and Beta regressions (`tests/root-node-compat.py`, normal and `--beta`) |
+| 4 | No-root/system updater JS and complete `tests/system_updates` discovery |
+
+Browser and ARM Python validation retain their separate jobs. Each selected
+serial block executes once per OS, with its existing command order and failure
+handling. The complete command multiset across shards equals unsharded execution;
+there is no concurrent execution inside a checkout. Browser identity is bound to
+runtime shard 2 (Homebrew and preview), conservatively retaining shard 1's
+existing UI binding; an unknown browser cannot grant reused evidence. `preview`
+receipts are selected only on shard 2; UI/Android receipts remain on shard 1.
+Changed routing is itself a global fingerprint input, so receipts
+for the previous layout cannot attest the new layout.
 
 Without `--shard`, local profiles and the no-argument full suite are unchanged.
+For local shard counts below four, serial owners fold modulo the count; `1/1`
+therefore retains every block. The Python partition rule is unchanged.
 Reproduce one CI partition from its own checkout with, for example:
 
 ```sh
@@ -53,7 +71,66 @@ ARM job package installation alone took 26m11s; test sharding does not address
 that independent delay. Record observed PR timings rather than promising a fixed
 fourfold end-to-end speedup.
 
+The serial redistribution uses [run 42494183249](https://github.com/Razdva122/clean-your-tv-lg-webos/actions/runs/42494183249)
+(2026-11-08, `62935a34`) as its baseline: runtime jobs were 12m29s/11m45s on the
+first Linux/macOS shards versus 6m27s–9m28s/6m53s–8m18s on the other shards.
+The first Linux job's executable log showed about 90s of TV/legacy work now shared
+by shards 2 and 3, and 38s of Homebrew work moved to shard 2, plus 49s of updater work moved
+to shard 4. These are observations from that run, not a fixed speedup promise.
+Preview shares Homebrew's browser-equipped shard 2. Routing regressions extend
+existing test methods instead of adding discovery occurrences, so the checks for
+this scheduling change do not themselves repartition later setup tests.
+
 ## Runner use, dependency caches and artifact retention
+
+### Installer test timings and skips
+
+Fresh runtime installer shards and desktop build host tests retain
+`cytv-test-timings-*` JSON artifacts for 14 days, including on test failures.
+The step summary lists the slowest 20 test occurrences and 10 shared fixture
+transitions. JSON includes every executed occurrence, shared class/module setup
+and teardown (including cleanups), overall test execution time, and skip reasons.
+Per-test durations include that test's setup, body and teardown. Fixture hook
+durations include hook overhead; nested module teardown is subtracted from module
+setup to avoid double counting. Discovery and dependency installation are outside
+the reported execution time. Repeated imported tests are preserved.
+
+Reproduce the report locally with the project Python environment:
+
+```sh
+QT_QPA_PLATFORM=offscreen .venv-cytv/bin/python scripts/test-shard.py \
+  -s tests/cytv --timings build/test-timings/cytv.json
+# Optional: add --shard 2/4 for one partition.
+```
+
+`CI_TEST_TIMINGS_DIR=build/test-timings scripts/test.sh installer` enables the
+same report through the existing profile. Unset, the local profile is unchanged.
+The shell consumes this variable without exporting it to nested test profiles,
+so those profiles cannot overwrite the outer report.
+Timings are diagnostics, never authenticated success receipts. A reused unit has
+no fresh timing artifact. Cancelled processes and discovery failures may have no
+JSON report; the existing test gate still fails.
+
+Conditional skips do not imply obsolete coverage. POSIX filesystem/process
+fixtures run on Linux/macOS rather than Windows; Qt/wallpaper cases need desktop
+build dependencies. Exact legacy Node cases run in Linux runtime jobs, and Linux
+root-only Python bootstrap cases run in the privileged optional-Python step.
+The legacy UID-501 ownership scenario requires that specific unprivileged host
+identity; inspect its actual skip records before changing the fixture. Do not
+remove these scenarios merely because another job skips them.
+
+### Evidence lookup cost
+
+Each lookup memoizes successful JSON API responses only for that invocation,
+within its existing 60-second budget. The next lookup re-reads mutable run state;
+failed requests are not cached. Binary receipts retain their existing size/digest
+checks. A receipt with no key matching any still-missing unit is rejected before
+provenance requests. Matching keys alone never grant coverage: originating run,
+latest-run status, successful job, checkout/tree and projected inputs are still
+authenticated. Logs show elapsed lookup time, API request count, memoized response
+hits and receipts rejected by keys, without logging raw API responses.
+
+### Runner allocation and retention
 
 The scope job emits `runtime_os` as JSON for the runtime matrix. Linux remains
 present, including for documentation-only changes, so the required summaries
@@ -87,6 +164,7 @@ Retention applies to newly uploaded Actions artifacts:
 | Direct Root TV candidate and signed Root QA candidate | 90 days |
 | Assembled release archive | 90 days |
 | Test-unit evidence receipts | 2 days (same UTC-day identity still required) |
+| Installer test timings and skip reasons | 14 days |
 | Theme review preview | 3 days |
 | Pages deployment artifact | 1 day (explicit existing action default) |
 
@@ -129,7 +207,8 @@ Selecting both `tv` and `tv-runtime` executes their common body once. No-argumen
 
 `scripts/ci-test-evidence.py` replaces PR-only success markers with small Actions
 artifact receipts. Runtime work uses existing component boundaries: `tv` expands
-to `ui` plus `tv-runtime`; UI, Android and preview run only on shard 1. Setup,
+to `ui` plus `tv-runtime`; UI and Android run only on shard 1, preview only on
+shard 2. Setup,
 installer and device runtime retain all four shards. The workflow invokes
 `test.sh` once with **only missing units**, and never with an empty argument list
 (which would run everything). Linux ownership verification is part of the primary
@@ -145,28 +224,60 @@ preview and installer UI tests. A missing/unavailable browser fingerprint forces
 fresh checks and cannot produce a reusable receipt; an unknown value never
 matches another unknown value.
 
-A unit key binds the complete nonmetadata source snapshot from `release-inputs.py`,
-unit/shard/OS, exact Python/Node/dependencies/compiler, runner image and UTC day.
-Setup additionally binds the full Git tree, because it tests README, release-plan
-and guide content. No new metadata exemption is introduced. Current release-plan
-shape is checked fresh outside reuse. README sanity runs within fresh setup or
-separately when setup is reused/unselected, avoiding a second identical local
-invocation. Package assembly, signing,
-artifact validation and physical acceptance are not replaced by test evidence.
+A v2 unit key binds an audited projection of the authenticated nonmetadata Git
+snapshot, unit/shard/OS, exact Python/Node/dependencies/compiler, runner image and
+UTC day. Independent executable test families no longer invalidate every block.
+For example, changing `tests/cytv/test_long_ssh_commands.py` invalidates installer
+work and setup, while unchanged UI/device/browser/ARM units can retain a matching
+success. The complete owning family participates on every shard, because test
+additions/deletions can repartition later cases.
 
-Only a same-repository, nonfork, successful first-attempt PR `Tests` run may produce
-a receipt, after its freshly executed checks pass. One JSON artifact per existing
-runtime/browser/ARM job lists only those fresh units, never reused units. Lookup
-verifies successful latest branch evidence, current run attempt and exact successful
-originating job, artifact digest/size/head binding, and the tested checkout via
-GitHub commit/tree data. A PR merge must contain the run head as its second parent;
-claimed fingerprints alone are insufficient. The complete authenticated source
-snapshot is recomputed. Fork consumers and explicit reruns execute fresh tests.
+This first projection is deliberately conservative: product code, dependencies,
+workflows/CI helpers, all setup/framework tests, generic/shared fixtures, package
+initializers, unknown paths and nonregular modes remain inputs to every unit.
+Audited installer fixtures consumed by Android/browser recovery and the ARM Python
+fixture belong to those units too. Theme helpers/fixtures remain global rather
+than being guessed from a filename suffix. Cross-family imports must be audited
+when dependencies change; ordinary PR routing alone is not dependency evidence.
+See `test_units`/`keys` in the evidence helper and its Git-mutation regression matrix.
+
+Setup additionally binds the full Git tree, because it tests README, release-plan
+and guide content. No release build-input exemption is introduced. Current
+release-plan shape is checked fresh outside reuse. README sanity runs within
+fresh setup or separately when setup is reused/unselected, avoiding a second
+identical local invocation. Package assembly, signing, artifact validation and
+physical acceptance are not replaced by test evidence; this change does not reuse
+installer packages across guarded source changes.
+
+Receipts originate from same-repository, nonfork, first-attempt PR `Tests`
+runs or explicit full candidates dispatched on `release/next`. They list only
+freshly passed units, never reused units. PR lookup requires a successful run and
+latest branch evidence. Full-candidate lookup requires the exact candidate
+workflow/ref, completed scope/full-release markers, and a completed successful
+originating job; another job may have failed. The latest preceding candidate's
+corresponding job must also be green. A newer failure, missing job, in-flight run
+or rerun prevents falling back to an older success.
+
+Lookup verifies current attempt, artifact digest/size/head binding and tested
+checkout through GitHub commit/tree data. A PR merge must contain the run head as
+its second parent; full candidates must test their exact run head. Each projected
+source is recomputed from the complete authenticated producer tree before
+comparing keys. Fork consumers and explicit reruns execute fresh tests.
+
+The four existing desktop build jobs have a separate `installer-host` unit for
+`tests/cytv`, distinct from runtime installer/Homebrew coverage. Its fingerprint
+includes actual Git, Zig, Python/Node, installed dependencies, Qt platform and
+runner/image identities, plus installed Linux desktop libraries. Unknown required
+identity prevents reuse and recording. Every package is still built and its
+installed-package checks still run.
 
 Receipts are bounded data: one flat `receipt.json`, at most 128 KiB compressed /
 64 KiB uncompressed, strict schema/JSON and no extraction, links or code execution.
 Missing, stale, failed, in-flight, altered or unverifiable evidence executes tests.
-Discovery checks at most 100 matching repository artifacts with a 60-second
+V2 discovery names bind kind/OS/shard/environment and policy version, not the
+whole source or selected-unit set. One receipt per existing job contains only its
+freshly executed unit keys, so a different-source receipt can supply a matching
+subset. Discovery checks at most 100 matching repository artifacts with a 60-second
 lookup budget and 20-second API deadlines; exceeding a bound is a miss, not a
 weaker proof. Each job logs executed units and
 links reused units to their originating jobs, also in its step summary. Evidence
@@ -178,10 +289,14 @@ are downloaded through the read-only
 [Actions artifacts API](https://docs.github.com/en/rest/actions/artifacts).
 No new secret, write permission, workflow, matrix or background service is needed.
 
-Bootstrap requires a genuinely successful producer on the new guarded source.
-Old PR cache markers cannot become receipts retroactively. Workflow/helper/test
-changes remain build inputs and invalidate old evidence; after integration, an
-identical combined source/environment can consume the PR's actual successes.
+Bootstrap requires freshly passed producer jobs on the new guarded source.
+Old v1 receipts, PR cache markers and historical full-run jobs cannot become v2
+receipts retroactively. Workflow/helper/test changes remain release build inputs;
+changes to the projection/trust policy invalidate every unit. After integration,
+matching projected inputs/environment can consume actual PR or candidate job
+successes, even when another test family changed. The first new-policy full
+candidate runs fresh when this batch deliberately skips separate PR suites. A first-attempt candidate can consume
+these proofs; explicit reruns remain fresh under the existing trust rule.
 Trusted publication gates and required job names remain unchanged. Hardware
 acceptance remains a separate gate.
 

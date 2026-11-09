@@ -30,7 +30,6 @@
     GRID_WIDTH = 1696,
     FOCUS_SCALE = 1.1,
     FOCUS_PADDING = 12,
-    CARD_GAP = 24,
     ROW_GAP = 90,
     DOCK_PADDING = 28,
     DOCK_TOP = 680,
@@ -48,7 +47,12 @@
   function updateGeometry(columns, preset, ribbon) {
     layoutPreset = preset || 'dock-grid';
     ribbonStart = 0;
-    layoutGeometry = HomeLayout.geometry(layoutPreset, columns, ribbon);
+    layoutGeometry = HomeLayout.geometry(
+      layoutPreset,
+      columns,
+      ribbon,
+      window.HomeWeather ? HomeWeather.reservation() : null
+    );
     columnCount = columns;
     GRID_LEFT = layoutGeometry.left;
     GRID_WIDTH = layoutGeometry.width;
@@ -355,7 +359,6 @@
       tr('Network settings')
     );
   }
-  var legacyOrderKey = 'tvhome.order';
   // App editing uses the existing grid positions and focus highlight.
   var library,
     hideButton,
@@ -446,6 +449,8 @@
       }
     }
     stage.style.webkitTransform = stage.style.transform = target;
+    if (window.HomeWeather)
+      HomeWeather.setScroll(offset, DOCK_TOP, layoutPreset);
   }
   // A fresh press that cannot move nudges the grid or shelf toward that direction.
   function edgeBump(direction) {
@@ -815,6 +820,7 @@
           library.add(app.id);
           closePicker();
           rebuild(app.id);
+          if (!app.icon && window.ROOT_VERSION) refreshInstalledApps(app.id);
           showToast(
             tr('{app} added', {
               app: app.title
@@ -861,7 +867,40 @@
             ? tr('Choose an app to add to Home.')
             : tr('All installed apps are already on Home.');
       renderPicker(choices);
+    }, visibleAppIds());
+  }
+  function visibleAppIds(first) {
+    var ids = library.visible().map(function (app) {
+      return app.id;
     });
+    return first
+      ? [first].concat(
+          ids.filter(function (id) {
+            return id !== first;
+          })
+        )
+      : ids;
+  }
+  function refreshInstalledApps(first) {
+    AppLibrary.installed(function (apps) {
+      if (apps !== null) {
+        library.refresh(apps);
+        // Keep inventory updates, but let the next normal rebuild render them
+        // when a menu, edit or button hold already owns the interaction.
+        if (
+          focusZone === 'grid' &&
+          !moveState &&
+          !pickerOpen &&
+          !undoState &&
+          !okHoldTimer &&
+          !pointerTimer &&
+          !document.hidden &&
+          !(window.RenewalPanel && window.RenewalPanel.isOpen())
+        ) {
+          rebuild(tiles[focusedTile] && tiles[focusedTile].app.id);
+        }
+      }
+    }, visibleAppIds(first));
   }
   function initializeApps() {
     library = AppLibrary.create(
@@ -1015,25 +1054,7 @@
       true
     );
     rebuild();
-    AppLibrary.installed(function (apps) {
-      if (apps !== null) {
-        library.refresh(apps);
-        // Keep inventory updates, but let the next normal rebuild render them
-        // when a menu, edit or button hold already owns the interaction.
-        if (
-          focusZone === 'grid' &&
-          !moveState &&
-          !pickerOpen &&
-          !undoState &&
-          !okHoldTimer &&
-          !pointerTimer &&
-          !document.hidden &&
-          !(window.RenewalPanel && window.RenewalPanel.isOpen())
-        ) {
-          rebuild(tiles[focusedTile] && tiles[focusedTile].app.id);
-        }
-      }
-    });
+    refreshInstalledApps();
   }
   // Tile rendering, icon colors and grid geometry.
   function createTile(app) {
@@ -1484,7 +1505,8 @@
       layoutPreset === 'scenic-grid' ||
       (layoutPreset === 'dock-grid' && 0 === row)
         ? (function (e) {
-            var t = e.app.title;
+            var t = e.app.title,
+              weatherRegion = window.HomeWeather && HomeWeather.reservation();
             heroTitle.style.fontSize =
               layoutPreset === 'scenic-grid' && t.length > 100
                 ? t.length > 160
@@ -1493,7 +1515,12 @@
                 : '';
             heroTitle.style.top =
               (layoutPreset === 'channel-list'
-                ? 548
+                ? Math.max(
+                    548,
+                    weatherRegion && weatherRegion.format !== 'text'
+                      ? weatherRegion.bottom + 36
+                      : 0
+                  )
                 : layoutPreset === 'scenic-grid'
                   ? TILE_BASE - 142
                   : TILE_BASE - HERO_OFFSET) + 'px';
@@ -1855,7 +1882,8 @@
       focusTopButton(1);
     shelf.setAttribute('aria-label', tr('Inputs'));
     shelf.style.left = GRID_LEFT - SHELF_INSET + 'px';
-    shelf.style.top = SHELF_TOP + 'px';
+    shelf.style.top =
+      (window.HomeWeather ? HomeWeather.shelfTop() : SHELF_TOP) + 'px';
     shelf.style.width = GRID_WIDTH + SHELF_INSET * 2 + 'px';
     focusedShelf = next;
     shelfLayout = null;
@@ -1968,8 +1996,14 @@
     shelf.classList.toggle(
       'covered',
       covered ||
-        SHELF_TOP + SHELF_WINDOW_TOP - scrollOffset <
-          header.offsetTop + header.offsetHeight + 16
+        (window.HomeWeather ? HomeWeather.shelfTop() : SHELF_TOP) +
+          SHELF_WINDOW_TOP -
+          scrollOffset <
+          Math.max(
+            header.offsetTop + header.offsetHeight,
+            window.HomeWeather ? HomeWeather.bottom() : 0
+          ) +
+            16
     );
     // The video plane ignores the fade, so a covered shelf has no preview.
     if (shelf.classList.contains('covered')) stopPreview();
@@ -2541,13 +2575,24 @@
         tile.el.classList.add('shown');
       });
       getElement('homeSurface').classList.remove('ctv-starting');
+      if (window.HomeName) HomeName.finishLoading();
     });
   }
+  // Weather changes reserve layout space without resetting the user's app/row.
+  document.addEventListener('home-weather-layout', function () {
+    var state = layoutState.state();
+    updateGeometry(state.columns, state.preset, state.ribbon);
+    layoutTiles();
+    renderShelf();
+    if (focusZone === 'grid') focusTile(focusedTile);
+    else setScroll(scrollOffset);
+  });
   window.HomeUIReady = (
     window.ThemeManager
       ? ThemeManager.start(presentHome)
       : Promise.resolve().then(presentHome)
   ).then(function () {
     window.RootLauncherRendered = true;
+    if (window.HomeWeather) HomeWeather.start();
   });
 })();

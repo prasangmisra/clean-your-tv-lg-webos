@@ -1,10 +1,6 @@
 # Update Clean Your TV
 
-> **Release 1.9.0:** see [versions, tested scope and recovery limits](RELEASE-1.9.0.md). C1 Beta is fresh-install only, selected automatically in the common installer; normal OTA is unavailable and physical C1 acceptance is pending. Historical results below retain their original artifact scope.
-
-> Version 1.7.0 uses Root/infrastructure 0.8.4 and independent Updaters 0.4.2. Its two native startup source choices (LG Channels / Live TV on by default, YouTube off) replace delayed boot/wake launches. There is no HDMI startup switch; a source switched off leaves startup to firmware. Native startup preparation retains the [LG Home Auto Launch dependency](../root-edition/README.md#candidate-native-startup-choices); see [1.7.0 acceptance and limits](RELEASE-1.7.0.md). The System supervisor target stays 1.2.0/protocol1, with the existing 1.1.2 migration limits below.
-
-> Historical [1.6.0 scope and limits](RELEASE-1.6.0.md), [dated acceptance](history/2026-11-02-release-1.6.0-final-acceptance.md) and available packages on [GitHub Releases](https://github.com/Razdva122/clean-your-tv-lg-webos/releases). Historical [1.5.4](RELEASE-1.5.4.md) and [1.5.0](RELEASE-1.5.0.md) evidence retains its original scope.
+> **Published v1.13.0:** fresh System Updater 1.2.7 / protocol 1. Changed shared Luna support reaches newly built coherent packages; ordinary component OTA does not replace a retained System supervisor. Explicit replacement still admits only installed 1.1.0/1.1.1, not 1.1.2/1.2.x. Signed Root update/rollback/forward passed on the maintainer C3 with retained System 1.2.5. This does not verify replacement of every supervisor, No-root OTA or ordinary public-feed early-launch behavior. [Tested scope and limits](history/2026-11-08-release-1.13.0-artifacts.md).
 
 **Existing Root installations:** published 1.4.0 is incompatible with the original
 1.3.0 System Updater destination inventory. Do not force that update or edit
@@ -165,3 +161,7 @@ wait without extending the launcher's health deadline.
 ## Automatic graphics selection
 
 In 1.6.0, installer builds contain both HD/FHD packages. New or explicitly migrated updater clients choose the signed 720p channel for a verified non-UHD TV and the existing 1080p channel for a verified UHD TV. Unknown capability stops before installation. Fresh eligible 1.6.0 setup can provision System 1.2.0; exact-package host fixtures cover fresh provisioning, while physical provisioning remains untested. The explicit replacement path admits only verified 1.1.0/1.1.1; installed 1.1.2 remains pinned with its previous channel behavior and has no general migration in 1.6.0. Ordinary component OTA does not replace it. Do not delete state or reinstall to force migration. Retained rollback packages and version/signature rules remain unchanged. The first legacy Home HD channel waits for an actual compatible published HD rollback baseline. [Selection, signed feeds and migration limits](development/HOME-GRAPHICS-RESOLUTION.md#automatic-selection-and-ota).
+
+## Candidate System support
+
+The unpublished v1.15.0 candidate packages fresh System Updater 1.2.8 / protocol 1 because its embedded shared Luna support changes. Existing supervisors stay pinned; ordinary component OTA does not replace them. Explicit supported replacement still admits only installed 1.1.0/1.1.1 and verifies the exact new bundle and readback. Installed 1.1.2/1.2.x are not newly admitted. See [candidate packaging and acceptance](RELEASE-1.15.0.md).

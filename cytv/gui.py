@@ -2,6 +2,7 @@
 import html
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import threading
 
@@ -9,12 +10,12 @@ from PySide6.QtCore import QObject, Signal, QUrl, QTimer, Qt
 from PySide6.QtGui import QDesktopServices, QIcon, QFontDatabase, QFont, QPixmap
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout,
                               QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
-                              QPushButton, QTextBrowser, QVBoxLayout, QWidget, QButtonGroup, QDialog)
+                              QPushButton, QTextBrowser, QVBoxLayout, QWidget, QButtonGroup, QDialog, QScrollArea, QLayout)
 
 from cytv import __version__, cli, diagnostics, i18n
 from cytv.i18n import translate as tr
 from cytv.desktop import Channel
-from cytv.gui_style import STYLE, TVPreview, Select, EditionOption, BrandSignature
+from cytv.gui_style import STYLE, TVPreview, Select, EditionOption, BrandSignature, WrappedLabel
 
 MAINTENANCE_ACTIONS = (
     ('Review recovery options', 'recover'),
@@ -33,7 +34,7 @@ class Events(QObject):
 
 
 class Wizard(QMainWindow):
-    def __init__(self, run=cli.main):
+    def __init__(self, run=cli.interactive_main):
         super().__init__()
         i18n.configure()
         self.run = run
@@ -43,6 +44,7 @@ class Wizard(QMainWindow):
         self.collect_preparation = False
         self.report = None
         self.recovery_profile = None
+        self.selected_profile = None
         self.recovery_plan = None
         self.failure_help = None
         self.worker = None
@@ -193,6 +195,10 @@ class Wizard(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, 'preview'):
             self.preview.setFixedHeight(144 if self.height() < 760 else 206)
+        if hasattr(self, 'form'):
+            choices = self.form.findChild(QScrollArea, 'runtimeChoices')
+            if choices is not None:
+                choices.setMinimumHeight(min(360, max(240, self.height()-440)))
 
     def apply_language_font(self):
         family = {'zh-Hans': 'Noto Sans SC', 'zh-Hant': 'Noto Sans TC'}.get(i18n.resolved_language())
@@ -220,13 +226,17 @@ class Wizard(QMainWindow):
         self.home()
 
     def clear_form(self):
-        while self.form_layout.count():
-            item = self.form_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.hide()
-                widget.setParent(None)
-                widget.deleteLater()
+        def clear(layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.hide()
+                    widget.setParent(None)
+                    widget.deleteLater()
+                elif item.layout():
+                    clear(item.layout())
+        clear(self.form_layout)
 
     def button(self, label, callback, default=False, layout=None):
         button = QPushButton(tr(label))
@@ -275,6 +285,7 @@ class Wizard(QMainWindow):
     def home(self):
         self.reset_checks()
         self.recovery_profile = None
+        self.selected_profile = None
         self.recovery_plan = None
         self.failure_help = None
         self.preparation = []
@@ -447,6 +458,7 @@ class Wizard(QMainWindow):
         self.language.setEnabled(False)
         self.report = None
         self.recovery_profile = None
+        self.selected_profile = None
         self.recovery_plan = None
         self.failure_help = None
         self.pending = None
@@ -468,6 +480,11 @@ class Wizard(QMainWindow):
                 if profile:
                     args += ['--host', profile['host'], '--edition', profile['edition'],
                              '--port', str(profile['port']), '--no-discovery']
+                    for field in ('connection', 'root_variant'):
+                        if profile.get(field):
+                            args += ['--'+field.replace('_','-'), profile[field]]
+                    if profile.get('identity'):
+                        args += ['--identity', profile['identity']]
                 args += ['--language', i18n.language_choice()]
                 code = self.run(args, ask=self.channel.ask, secret=self.channel.secret, write=self.channel.console)
             except Exception:
@@ -547,6 +564,9 @@ class Wizard(QMainWindow):
                 self.subtitle.show()
         elif kind == 'recovery':
             self.recovery_profile = dict(value)
+        elif kind == 'selected-profile':
+            self.selected_profile = dict(value)
+            self.reset_checks()
         elif kind == 'prompt':
             self.show_prompt(value)
         elif kind == 'done':
@@ -575,6 +595,7 @@ class Wizard(QMainWindow):
             recover = (not cleanup and self.recovery_profile is not None and
                        ((self.recovery_plan is None and
                          (value == 0 or (self.failure_help or {}).get('code') in ('removal-not-submitted','no-root-recovery'))) or
+                        (self.recovery_plan is not None and self.recovery_plan.get('state') == 'review') or
                         (self.recovery_plan is not None and self.recovery_plan.get('state') != 'complete' and
                          type(self.recovery_plan.get('actions')) is list and
                          'continue-removal' in self.recovery_plan.get('actions', []))))
@@ -600,22 +621,46 @@ class Wizard(QMainWindow):
                 self.badge.setText(self.title.text())
             if recover:
                 profile = dict(self.recovery_profile)
-                self.title.setText(tr('Review recovery options'))
+                self.title.setText(tr('Cancelled' if value == 130 else 'Review recovery options'))
                 self.badge.setText(self.title.text())
                 self.subtitle.setText(tr('Checking recovery does not reinstall or remove packages. Root checks may run verified support code.'))
                 self.button('Review recovery options', lambda: self.start('recover', profile), not failed)
             elif retry_removal:
                 profile = dict(self.recovery_profile)
-                self.button('Try again', lambda: self.start('uninstall', profile), True)
+                if 'connect-root' in self.recovery_plan.get('actions', []):
+                    from .recovery_ui import root_removal_profile
+                    from .state import Store
+                    root_profile = root_removal_profile(Store(), profile)
+                    self.button('Connect using Root', lambda: self.start('uninstall', root_profile), True)
+                else:
+                    self.button('Try again', lambda: self.start('uninstall', profile), True)
+                from .recovery_ui import removal_connection_failure
+                if removal_connection_failure(self.recovery_plan, self.failure_help):
+                    self.button('Connection details', lambda: self.edit_connection(profile, removal=True))
+            connection_help = (failed and self.failure_help and self.failure_help.get('can_edit_connection')
+                               and self.failure_help['code'].startswith(('ssh-', 'developer-key-'))
+                               and self.selected_profile and not self.recovery_plan and not self.recovery_profile)
+            if connection_help:
+                profile = dict(self.selected_profile)
+                self.button('Check connection again', lambda: self.start('doctor', profile), True).setFocus()
+                actions = QHBoxLayout()
+                self.form_layout.addLayout(actions)
+                if sys.platform == 'darwin' and self.failure_help['code'] in ('ssh-access-denied', 'ssh-unreachable', 'ssh-timeout'):
+                    self.button('Open System Settings', self.open_network_settings, layout=actions)
+                self.button('Change connection', lambda: self.edit_connection(profile), layout=actions)
+            report_actions = None
+            if connection_help:
+                report_actions = QHBoxLayout()
+                self.form_layout.addLayout(report_actions)
             if self.report:
-                self.button('Save diagnostic report…', self.save_report, (failed or setup_review) and not retry_removal)
+                self.button('Save diagnostic report…', self.save_report, (failed or setup_review) and not retry_removal and not connection_help, layout=report_actions)
                 if failed:
                     self.subtitle.setText(tr('Save the report from this failed attempt and attach it to your issue. Recovery data has been kept.'))
             elif failed:
                 self.subtitle.setText(tr('A diagnostic report could not be created. Include the visible error when opening an issue.'))
             if (failed and not cleanup) or self.check_results.get('home-button', {}).get('status') == 'fail':
-                self.button('Open an issue', lambda: QDesktopServices.openUrl(QUrl(diagnostics.ISSUE_URL)))
-            self.button('Back to start', self.home, not retry_removal and not recover and not ((failed or setup_review) and self.report))
+                self.button('Open an issue', lambda: QDesktopServices.openUrl(QUrl(diagnostics.ISSUE_URL)), layout=report_actions)
+            self.button('Back to start', self.home, not connection_help and not retry_removal and not recover and not ((failed or setup_review) and self.report))
             failed_checks = [result for result in self.check_results.values() if result['status'] in ('fail', 'unknown')]
             if failed and failed_checks:
                 self.subtitle.setText(tr('Failed') + ': ' + ', '.join(tr(result['label']) for result in failed_checks) + '\n' + self.subtitle.text())
@@ -638,6 +683,75 @@ class Wizard(QMainWindow):
                     if self.failure_help and self.failure_help.get('code') in ('ssh-auth-root','ssh-auth-no-root','ssh-key-file','ssh-identity','developer-key-server','developer-key-unlock','developer-key-response'):
                         message = self.failure_help['next_step']
                     self.subtitle.setText(tr(message)+('' if show_restart or connection else '\n'+tr(detail.get('stage_text', ''))))
+
+            if connection_help:
+                self.subtitle.setText(tr(self.failure_help['detail']))
+                if not self.report:
+                    self.subtitle.setText(self.subtitle.text()+'\n'+tr('A diagnostic report could not be created. Include the visible error when opening an issue.'))
+                messages = [self.failure_help['next_step']]
+                if sys.platform == 'darwin' and self.failure_help['code'] in ('ssh-access-denied', 'ssh-unreachable', 'ssh-timeout'):
+                    # macOS can retain an older duplicate's display name. The socket
+                    # error alone does not establish the Local Network switch state.
+                    app = next((p.name for p in Path(sys.executable).parents if p.suffix == '.app'), 'cytv')
+                    mac_help = tr('In System Settings → Privacy & Security → Local Network, allow {app}. macOS may show an older copy’s name. Fully quit cytv and reopen it after changing access.').format(app=app)
+                    messages = [mac_help] if self.failure_help['code'] == 'ssh-access-denied' else [*messages, mac_help]
+                self.content.setMaximumHeight(16777215)
+                self.content.setHtml(''.join('<p>'+html.escape(tr(message))+'</p>' for message in messages))
+                self.content.moveCursor(self.content.textCursor().MoveOperation.Start)
+                self.check_panel.hide()
+
+    def open_network_settings(self):
+        try:
+            subprocess.Popen(['open', '-b', 'com.apple.systempreferences'])
+        except OSError:
+            self.error_dialog('Open System Settings', self.failure_help['next_step'])
+
+    def edit_connection(self, profile, removal=False):
+        """Check edited fields; never resume installation from a connection error."""
+        self.clear_form()
+        self.set_error_state(False)
+        self.title.setText(tr('Connection details'))
+        self.subtitle.setText(tr('Review the selected edition and SSH port against your existing trusted access. Do not weaken SSH security or disable host verification.'))
+        if removal and self.failure_help:
+            self.subtitle.setText(tr(self.failure_help['next_step']))
+        self.content.hide()
+        self.steps.hide()
+        self.check_panel.hide()
+        address, port = QLineEdit(profile['host']), QLineEdit(str(profile['port']))
+        edition = Select()
+        for key in ('root', 'no-root'):
+            edition.addItem('Root' if key == 'root' else 'No-root', key)
+        edition.setCurrentIndex(0 if profile['edition'] == 'root' else 1)
+        if removal:
+            address.setReadOnly(True)
+            port.setReadOnly(True)
+            edition.setEnabled(False)
+        for text, control in [('TV IPv4 address or hostname', address), ('Edition', edition),
+                              ('SSH port (No-root: 9922; Root: 22)', port)]:
+            label = QLabel(tr(text))
+            label.setBuddy(control)
+            control.setAccessibleName(label.text())
+            self.form_layout.addWidget(label)
+            self.form_layout.addWidget(control)
+        def check():
+            from .state import target
+            try:
+                options = {key: profile[key] for key in ('connection', 'root_variant')
+                           if key in profile and edition.currentData() == profile['edition']}
+                edited = target(address.text(), edition.currentData(), port.text(), **options)
+            except ValueError:
+                self.subtitle.setText(tr('Invalid TV address or port. Use an IPv4 address or hostname and a port from 1 to 65535.'))
+                return
+            self.start('uninstall' if removal else 'doctor', edited)
+        if removal and (profile['edition'] == 'root' or profile.get('connection') == 'root-ssh'):
+            def choose_key():
+                filename, _ = QFileDialog.getOpenFileName(self, tr('Choose your existing SSH private key'))
+                if filename:
+                    self.start('uninstall', dict(profile, identity=filename))
+            self.button('Choose key file…', choose_key)
+        self.button('Try again' if removal else 'Check connection again', check, True)
+        self.button('Back to start', self.home)
+        address.setFocus()
 
     def show_prompt(self, prompt):
         self.check_panel.hide()
@@ -673,16 +787,27 @@ class Wizard(QMainWindow):
         label.setWordWrap(True)
         label.setObjectName('promptTitle')
         self.form_layout.addWidget(label)
-        if prompt.kind == 'confirm':
+        if prompt.label == 'Installer version choice: ':
+            from .installer_update import DOWNLOAD, CONTINUE, RELEASES
+            self.title.setText(tr('A newer installer is available'))
+            self.subtitle.hide()
+            def download_installer():
+                QDesktopServices.openUrl(QUrl(RELEASES))
+                self.submit('1')
+            self.button(DOWNLOAD, download_installer, True).setFocus()
+            self.button(CONTINUE, lambda: self.submit('2'))
+        elif prompt.kind == 'confirm':
             trust_prompt = prompt.label.startswith('Connect and remember this TV?')
-            label = 'Connect and remember' if trust_prompt else 'Continue'
+            beta_prompt = prompt.label.startswith('Install experimental Root Beta?')
+            label = 'Connect and remember' if trust_prompt else 'Try Root Beta' if beta_prompt else 'Continue'
             yes = self.button(label, lambda: self.submit('y'), prompt.default == 'y')
-            no = self.button('No, go back / cancel this operation', lambda: self.submit('n'), prompt.default == 'n')
+            no = self.button('Cancel' if beta_prompt else 'No, go back / cancel this operation', lambda: self.submit('n'), prompt.default == 'n')
             (yes if prompt.default == 'y' else no).setFocus()
             if trust_prompt:
                 self.button('Connection details', lambda: self.submit('?'))
         elif prompt.kind == 'choice' and prompt.label.startswith('Edition'):
-            options = QWidget()
+            options = QFrame()
+            options.setObjectName('runtimeChoiceList')
             row = QHBoxLayout(options)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(12)
@@ -699,6 +824,45 @@ class Wizard(QMainWindow):
             group.buttonToggled.connect(lambda: proceed.setEnabled(group.checkedButton() is not None))
             if group.checkedButton():
                 group.checkedButton().setFocus()
+        elif prompt.kind == 'choice' and prompt.label.startswith('Alternative edition'):
+            # These choices lead to different setup paths. Keep both explanations
+            # visible and give each action its own verb; cancellation is separate.
+            label.hide()
+            choices = QScrollArea()
+            choices.setObjectName('runtimeChoices')
+            choices.setFrameShape(QFrame.Shape.NoFrame)
+            choices.setWidgetResizable(True)
+            choices.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            choices.setMinimumHeight(min(360, max(240, self.height()-440)))
+            options = QWidget()
+            rows = QVBoxLayout(options)
+            rows.setContentsMargins(0, 0, 0, 0)
+            rows.setSpacing(10)
+            rows.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+            choices.setWidget(options)
+            options.setAutoFillBackground(False)
+            self.form_layout.addWidget(choices)
+            for key, name, detail in prompt.options:
+                if key == '0':
+                    continue
+                card = QFrame()
+                card.setObjectName('runtimeChoice')
+                column = QVBoxLayout(card)
+                column.setContentsMargins(14, 12, 14, 12)
+                column.setSpacing(8)
+                column.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+                title = WrappedLabel(tr(name))
+                title.setObjectName('promptTitle')
+                column.addWidget(title)
+                description = WrappedLabel(tr(detail))
+                description.setObjectName('choiceDetail')
+                column.addWidget(description)
+                action = 'Install No-root' if key == '1' else 'Try Root Beta'
+                self.button(action, lambda _checked=False, selected=key: self.submit(selected), layout=column)
+                rows.addWidget(card)
+            cancel = self.button('Cancel', lambda: self.submit('0'))
+            cancel.setDefault(True)
+            cancel.setFocus()
         elif prompt.kind == 'choice':
             choices = Select()
             choices.setAccessibleName(tr(prompt.title))
@@ -723,6 +887,10 @@ class Wizard(QMainWindow):
                 entry.setEchoMode(QLineEdit.EchoMode.Password)
             elif 'IP address' in prompt.label:
                 entry.setPlaceholderText(tr('For example, 192.168.1.50'))
+            elif prompt.label == 'TV name [Home]: ':
+                entry.setText(prompt.default)
+                entry.setMaxLength(48)
+                entry.selectAll()
             self.form_layout.addWidget(entry)
             def submit_entry():
                 value = entry.text()

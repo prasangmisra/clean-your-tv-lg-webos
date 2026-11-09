@@ -63,7 +63,9 @@ firmware. No supported historical readback was established, so neither legacy
 pending action gains a reconciliation path. The handoff identifies the exact
 vendor contract needed before a device probe can be designed.
 
-## Normal-install catalog convergence (unreleased)
+<a id="normal-install-catalog-convergence-unreleased"></a>
+
+## Normal-install catalog convergence
 
 After both live `dev/install` streams return terminal success, the No-root
 installer uses a ten-second polling budget for one `/dev/listApps` snapshot
@@ -87,6 +89,90 @@ confirmation. Shared console/desktop/Android packages need a normal future build
 this focused change does not select or modify a frozen release candidate.
 
 ## Remaining evidence
+
+<a id="observer-storage-next-candidate-2026-11-07"></a>
+
+### Observer storage (from v1.12.0)
+
+The v1.11.0 storage correction keeps private observer evidence in `/tmp/.cytv-installer` (0700),
+under verified sticky temporary ancestry. IPKs remain in the vendor SDK staging
+namespace `/media/developer/temp`; the observer accepts the fixed root-owned
+SDK containers with their retail permissions, while its private evidence keeps
+the stricter ancestry rules. No vendor permission is changed. The public staging
+path retains the SDK's shared-namespace trust limitation; inode checks do not
+make the installer's later pathname open atomic with host verification.
+
+Before recording pending, one storage check exercises private write/hardlink/sync
+and public staging creation/removal. Failure leaves no new operation receipt or
+capsule. This does not guarantee later writes against disconnects or full disks.
+
+Already pending operations retain their journal/capsule. All earlier observer
+sources, including partial installations, use the cleanup fallback after this
+source change. A source mismatch or
+lost volatile evidence cannot authorize replay. **Review recovery options** offers
+the existing separately confirmed project removal, which archives the original,
+skips absent packages and requires its normal full-restart verification. A new
+setup is a separate action after verified removal; status never clears pending
+because files are absent. Cleanup recognizes both the old and new private roots.
+No new confirmation, package endpoint or recovery protocol is introduced.
+
+The implementation has host regression coverage only; retail installation and
+recovery remain unverified. See the [source record](../history/2026-11-07-no-root-observer-storage.md).
+
+<a id="developer-mode-private-storage-selection-unreleased"></a>
+
+### Developer Mode private storage selection
+
+Developer Mode can expose a jail with an owned, writable `/` while `/tmp` is
+execute-only. New Developer Mode operations first make one read-only selection
+between `/tmp/.cytv-installer` and `/.cytv-installer`. A sole existing root is
+retained; two existing roots refuse setup rather than hide another reservation.
+An existing unsafe leaf is never repaired or bypassed. With neither root present,
+the jail root is admitted only for a non-root UID owning its real parent, with
+owner read/write/traversal and no group/other write bits. Otherwise the legacy
+temporary root remains selected. The existing storage check must then pass all
+private ownership/0700/ancestry, write/link/fsync and SDK staging checks before
+pending is created. There is no fallback after storage refusal or package work.
+
+New jail-root plans carry `private_root` inside the plan covered by the observer's
+canonical hash and the host capsule digest. The host admits only the two fixed
+Developer Mode locations. Continuation, observation and detached workers use the
+original selected path; they never select another root when evidence is missing.
+Legacy plans without the field still mean `/tmp/.cytv-installer`. Both bound
+observer source strings are unchanged, so this addition does not invalidate
+otherwise compatible existing capsules. Earlier incompatible sources retain the
+historical confirmed-cleanup fallback described above. Root SSH keeps its exact
+private/public roots and does not run selection.
+
+Developer Mode cleanup includes the fixed jail leaf in its resident-worker,
+staging-scope, idle and explicit sweep checks, retaining the ordinary restart
+fence. It requires a real, owned `0700` leaf and strict private ancestry; foreign,
+symlinked or writable private roots block cleanup. Root SSH cleanup does not
+interpret `/.cytv-installer` in its different filesystem namespace as owned
+Developer Mode evidence. Cross-namespace device cleanup is not established by
+host fixtures. No parent chmod/chown, automatic migration or capsule editing is
+introduced; SDK IPKs stay under `/media/developer/temp`.
+
+The existing volatile restart-proof marker remains under `/tmp` with its original
+strict sticky-parent checks. A persistent jail directory cannot replace proof of
+a full restart. Firmware refusing that marker may still block explicit removal;
+this change must not turn that refusal into a clean result or permission to replay.
+Host continuation and cleanup fixtures do not establish physical installation,
+restart proof, removal or compatibility on a reporting TV. Rebuild shared
+desktop/console/Android installers and Root Updater's embedded cleanup bundle;
+do not reuse a previously built candidate as evidence for these changed bytes.
+
+The earlier conservative per-filesystem installation budget remains separate:
+SDK package staging, private observer evidence and vendor package-manager scratch
+are different needs. `storage.install` still checks the unpacked-package estimate
+plus reserve on `/tmp` before selection. Zero available `/tmp` space therefore
+stops before pending or package submission even with a writable jail root. This
+change neither proves that vendor scratch is accessible in the jailed namespace
+nor moves its estimate to the private evidence directory. Revising that estimate
+requires separate filesystem/vendor evidence; it is not a workaround for a
+capacity refusal.
+
+### Original historical transaction contract
 
 The next work belongs to maintainer research into terminal authority, rather
 than another C2 inventory request. Before implementing reconciliation, establish
@@ -119,3 +205,28 @@ manual removal, cannot clear pending. Transport fixtures cover acceptance,
 progress, terminal success, denial, interrupted EOF and timeout for both install
 and removal. These are host models; actual service registration, UI controls,
 sound, standby, cold boot, OTA and rollback remain untested.
+
+## Vendor-normalized pairing-key mode (#437, unreleased)
+
+An authenticated Developer Mode install continuation may restrict the existing
+`ssap-key.json` mode from exactly 0775 to 0640 after Helper is observed stopped
+or stale. Both configuration leaves must first pass the existing ownership,
+regular-file, single-link and no-world-write checks. The key must belong to the
+current SSH UID; an opened no-follow directory and file descriptor bind the
+change to the checked inode. The mode change preserves key bytes, UID and GID,
+and does not alter `apps.json`, `blocked`, watchdog or controller state. Other
+unsafe modes, foreign owners, links and substituted paths still refuse.
+
+This repair runs before the existing configuration claim/upload so the immutable
+observer can keep enforcing private key permissions. Both bound observer source
+strings, operation plans, capsules and package receipts remain unchanged. Root
+SSH keeps its previous behavior. Status/configuration readback remains read-only
+and does not repair permissions or reinterpret missing transaction evidence.
+An emergency stop still prevents automatic Helper launch until reviewed through
+the existing TV controls. No new endpoint, persistent record or permission grant
+is introduced; embedding desktop/console/Android installers require rebuilding.
+
+The exact reported refusal and corrected host continuation are covered by
+synthetic filesystem/process regressions. The origin of the firmware's 0775 mode
+and acceptance on the reporting C2 remain unconfirmed. See the
+[dated verification and limits](../history/2026-11-08-issue437-key-mode-repair.md).

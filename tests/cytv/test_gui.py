@@ -1,5 +1,6 @@
 """Offline widget checks; never connect to a TV."""
 import os
+import sys
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import tempfile
 import time
@@ -7,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 try:
-    from PySide6.QtWidgets import QApplication, QPushButton, QLineEdit, QComboBox, QRadioButton, QDialog
+    from PySide6.QtWidgets import QApplication, QPushButton, QLineEdit, QComboBox, QRadioButton, QDialog, QLabel, QScrollArea
     from cytv.gui import Wizard
     from cytv.desktop import Prompt
     HAS_QT = True
@@ -17,6 +18,140 @@ except ImportError:
 
 @unittest.skipUnless(HAS_QT, 'Desktop build dependencies are optional for CLI tests')
 class GuiTests(unittest.TestCase):
+    def test_tv_name_prompt_prefills_home_and_submits_custom_name(self):
+        w=Wizard();self.addCleanup(w.close)
+        from cytv.desktop import Channel
+        w.channel=Channel(lambda *_:None)
+        w.show_prompt(Prompt('TV name [Home]: '))
+        entry=w.form.findChildren(QLineEdit)[0]
+        self.assertEqual(entry.text(),'Home')
+        self.assertEqual(entry.maxLength(),48)
+        entry.setText('Aashiyaan')
+        next(button for button in w.form.findChildren(QPushButton) if button.text()=='Continue').click()
+        self.assertEqual(w.channel.answers.get_nowait(),'Aashiyaan')
+
+    def test_default_wizard_runs_update_gate_before_payload_or_tv_changes(self):
+        from cytv import installer_update as update
+        w=Wizard()
+        self.addCleanup(w.close)
+        with patch('cytv.cli.choose_profile',return_value={'host':'192.0.2.1','edition':'root','port':22}), patch.object(update,'latest',return_value='0.15.0'), patch('cytv.package.verify_payload') as payload, patch('cytv.gui.QDesktopServices.openUrl',return_value=True):
+            w.start('install')
+            deadline=time.monotonic()+3
+            while not w.pending and time.monotonic()<deadline:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.assertIsNotNone(w.pending)
+            self.assertEqual(w.pending.label,update.PROMPT)
+            next(b for b in w.form.findChildren(QPushButton) if b.text()==update.DOWNLOAD).click()
+            w.worker.join(timeout=3)
+            self.assertFalse(w.worker.is_alive())
+            self.app.processEvents()
+            payload.assert_not_called()
+            self.assertIn('Installation has not started.',w.content.toPlainText())
+
+    def test_installer_update_has_two_direct_actions_and_no_implicit_install(self):
+        from cytv.desktop import Channel
+        from cytv import installer_update as update
+        for action, answer in [('Open GitHub and download the latest version', '1'), ('No, install this version', '2')]:
+            w=Wizard()
+            self.addCleanup(w.close)
+            w.channel=Channel(lambda *_:None)
+            with patch('cytv.gui.QDesktopServices.openUrl',return_value=True) as browser:
+                w.show_prompt(Prompt(update.PROMPT,[('1',update.DOWNLOAD,''),('2',update.CONTINUE,'')]))
+                self.assertFalse(w.form.findChildren(QComboBox))
+                buttons=w.form.findChildren(QPushButton)
+                self.assertFalse(any(b.isDefault() for b in buttons if b.text()==update.CONTINUE))
+                next(b for b in buttons if b.text()==action).click()
+                self.assertEqual(w.channel.answers.get_nowait(),answer)
+                self.assertEqual(browser.called,answer=='1')
+
+    def test_runtime_alternatives_are_visible_direct_actions_with_separate_cancel(self):
+        from cytv import i18n
+        from cytv.desktop import Channel
+        from cytv.root_runtime import NOTICE, NO_ROOT_TITLE, NO_ROOT_DETAIL, BETA_TITLE
+        for language in ('en', 'ru', 'de'):
+            for choice, action in (('1', 'Install No-root'), ('2', 'Try Root Beta'), ('0', 'Cancel')):
+                with self.subTest(language=language, choice=choice):
+                    w=Wizard()
+                    self.addCleanup(w.close)
+                    i18n.set_language(language)
+                    w.channel=Channel(lambda *_:None)
+                    w.show_prompt(Prompt('Alternative edition [0]: ',[
+                        ('1',NO_ROOT_TITLE,NO_ROOT_DETAIL),('2',BETA_TITLE,NOTICE),('0','Cancel','')]))
+                    self.assertFalse(w.form.findChildren(QComboBox),'Alternatives must be visible without opening a list')
+                    buttons=w.form.findChildren(QPushButton)
+                    self.assertFalse(any(button.text()==i18n.translate('Continue') for button in buttons))
+                    selected=next(button for button in buttons if button.text()==i18n.translate(action))
+                    cancel=next(button for button in buttons if button.text()==i18n.translate('Cancel'))
+                    self.assertTrue(cancel.isDefault())
+                    self.assertTrue(all(not button.isDefault() for button in buttons if button!=cancel))
+                    self.assertTrue(any(label.wordWrap() and label.text()==i18n.translate(NOTICE)
+                                        for label in w.form.findChildren(QLabel)))
+                    selected.click()
+                    self.assertEqual(w.channel.answers.get_nowait(),choice)
+
+    def test_runtime_alternative_without_beta_does_not_offer_beta_action(self):
+        w=Wizard()
+        self.addCleanup(w.close)
+        w.show_prompt(Prompt('Alternative edition [0]: ',[
+            ('1','Install No-root using existing root SSH','Uses Home and Home Helper. Developer Mode is not installed.'),
+            ('0','Cancel','')]))
+        self.assertFalse(w.form.findChildren(QComboBox))
+        self.assertEqual(len(w.form.findChildren(QPushButton)),2)
+
+    def test_beta_confirmation_names_the_action_and_cancel(self):
+        from cytv.desktop import Channel
+        for choice, action in (('y','Try Root Beta'),('n','Cancel')):
+            w=Wizard()
+            self.addCleanup(w.close)
+            w.channel=Channel(lambda *_:None)
+            w.show_prompt(Prompt('Install experimental Root Beta? [y/N]: '))
+            button=next(button for button in w.form.findChildren(QPushButton) if button.text()==action)
+            button.click()
+            self.assertEqual(w.channel.answers.get_nowait(),choice)
+
+    def test_runtime_choices_keep_full_descriptions_visible_in_all_languages(self):
+        from cytv import i18n
+        from cytv.root_runtime import NOTICE, NO_ROOT_TITLE, NO_ROOT_DETAIL, BETA_TITLE
+        for language in set(i18n.LANGUAGES)-{'auto'}:
+            with self.subTest(language=language):
+                w=Wizard()
+                self.addCleanup(w.close)
+                i18n.set_language(language)
+                w.preview.hide()
+                w.resize(900,680)
+                w.show_prompt(Prompt('Alternative edition [0]: ',[
+                    ('1',NO_ROOT_TITLE,NO_ROOT_DETAIL),('2',BETA_TITLE,NOTICE),('0','Cancel','')]))
+                w.show()
+                for _ in range(3): self.app.processEvents()
+                scroll=w.form.findChild(QScrollArea,'runtimeChoices')
+                descriptions=[label for label in w.form.findChildren(QLabel) if label.objectName() in ('choiceDetail','promptTitle') and label.isVisible()]
+                self.assertEqual(len(descriptions),4)
+                for label in descriptions:
+                    self.assertGreaterEqual(label.height(),label.heightForWidth(label.width()))
+                    self.assertTrue(label.parentWidget().rect().contains(label.geometry()))
+                    scroll.ensureWidgetVisible(label)
+                    self.app.processEvents()
+                    self.assertTrue(scroll.viewport().rect().contains(label.mapTo(scroll.viewport(),label.rect().bottomRight())))
+                    for sibling in label.parentWidget().findChildren(QPushButton):
+                        self.assertFalse(label.geometry().intersects(sibling.geometry()),'Choice text must not hide behind its action')
+                for button in w.form.findChildren(QPushButton):
+                    if button.parentWidget()!=w.form:
+                        scroll.ensureWidgetVisible(button)
+                        self.app.processEvents()
+                    self.assertTrue(w.rect().contains(button.mapTo(w,button.rect().bottomRight())))
+                w.close()
+
+    def test_edition_switch_replaces_failed_root_checks_with_new_checks(self):
+        w=Wizard()
+        self.addCleanup(w.close)
+        w.receive('check',{'id':'node-version','label':'TV Node.js 8+','status':'fail','detail':''})
+        w.receive('selected-profile',{'host':'192.0.2.10','port':22,'edition':'no-root','connection':'root-ssh'})
+        w.receive('check',{'id':'helper-node','label':'TV Node.js 0.10.15+','status':'pass','detail':''})
+        self.assertNotIn('node-version',w.check_results)
+        self.assertEqual(w.check_results['helper-node']['status'],'pass')
+        self.assertNotIn('TV Node.js 8+',w.check_panel.toPlainText())
+
     def test_check_results_survive_error_steps_and_reset_at_home(self):
         w = Wizard()
         self.addCleanup(w.close)
@@ -164,6 +299,110 @@ class GuiTests(unittest.TestCase):
         self.assertIn('could not be created',w.subtitle.text())
         self.assertEqual(calls,[])
         w.home();self.assertIsNone(w.failure_help)
+
+    def test_network_failure_actions_recheck_without_install_and_preserve_recovery(self):
+        import errno
+        from cytv.failure_help import for_error
+        profile = {'host': '192.0.2.10', 'port': 22, 'edition': 'root'}
+        calls = []
+        w = Wizard(run=lambda args, **kw: calls.append(args) or 0)
+        self.addCleanup(w.close)
+        w.show()
+        w.command = 'install'
+        w.receive('selected-profile', profile)
+        w.receive('check', {'id': 'ssh', 'label': 'SSH connection and sign-in', 'status': 'fail', 'detail': ''})
+        w.receive('failure-help', for_error(PermissionError(errno.EACCES, 'PRIVATE'), 'ssh-connect', profile))
+        with patch('cytv.gui.sys.platform', 'darwin'):
+            w.receive('done', 1)
+        self.app.processEvents()
+        self.assertIn('blocked', w.subtitle.text())
+        self.assertIn('Local Network', w.content.toPlainText())
+        self.assertIn('older', w.content.toPlainText())
+        self.assertTrue(w.check_panel.isHidden())
+        buttons = {b.text(): b for b in w.form.findChildren(QPushButton)}
+        self.assertTrue(buttons['Check connection again'].isDefault())
+        with patch('cytv.gui.subprocess.Popen') as launch:
+            buttons['Open System Settings'].click()
+            launch.assert_called_once_with(['open', '-b', 'com.apple.systempreferences'])
+        buttons['Check connection again'].click()
+        self.pump(lambda: not w.running)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], 'doctor')
+        self.assertIn('--report', calls[0])
+        self.assertEqual(calls[0][calls[0].index('--host') + 1], '192.0.2.10')
+        w.home()
+        self.assertIsNone(w.selected_profile)
+        w.receive('selected-profile', profile)
+        w.receive('failure-help', for_error(PermissionError(errno.EACCES, 'PRIVATE'), 'ssh-connect', profile,
+                                          {'action': 'install', 'stage': 'coordinator-submitted'}))
+        w.receive('done', 1)
+        labels = [b.text() for b in w.form.findChildren(QPushButton)]
+        self.assertNotIn('Check connection again', labels)
+        self.assertNotIn('Change connection', labels)
+
+    def test_macos_timeout_keeps_network_checklist_with_optional_permission_advice(self):
+        from cytv.failure_help import for_error
+        w = Wizard(); self.addCleanup(w.close)
+        w.receive('selected-profile', {'host': '192.0.2.10', 'port': 22, 'edition': 'root'})
+        w.receive('failure-help', for_error(TimeoutError(), 'ssh-connect', {'edition': 'root'}))
+        with patch('cytv.gui.sys.platform', 'darwin'):
+            w.receive('done', 1)
+        text = w.content.toPlainText()
+        self.assertIn('Keep the TV on', text)
+        self.assertIn('SSH port', text)
+        self.assertIn('VPN', text)
+        self.assertIn('System Settings', text)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS permission layout uses native macOS font metrics')
+    def test_russian_macos_permission_help_and_actions_fit_small_window(self):
+        import errno
+        from cytv import i18n
+        from cytv.failure_help import for_error
+        w = Wizard(); self.addCleanup(w.close)
+        i18n.set_language('ru')
+        w.home(); w.resize(900, 680); w.show(); w.preview.hide()
+        w.receive('selected-profile', {'host': '192.0.2.10', 'port': 22, 'edition': 'root'})
+        w.receive('text', 'Connecting to the TV…')
+        w.receive('check', {'id': 'ssh', 'label': 'SSH connection and sign-in', 'status': 'fail', 'detail': ''})
+        report = Path(self.directory.name) / 'report.json'; report.write_text('{}')
+        w.receive('report', report)
+        w.receive('failure-help', for_error(PermissionError(errno.EACCES, 'PRIVATE'), 'ssh-connect', {'edition': 'root'}))
+        with patch('cytv.gui.sys.platform', 'darwin'), patch('cytv.gui.sys.executable', '/Applications/cytv 8.app/Contents/MacOS/cytv'):
+            w.receive('done', 1)
+        self.app.processEvents()
+        self.assertIn('cytv 8.app', w.content.toPlainText())
+        self.assertEqual(w.content.verticalScrollBar().maximum(), 0)
+        for button in w.form.findChildren(QPushButton):
+            self.assertTrue(w.rect().contains(button.mapTo(w, button.rect().bottomRight())))
+            self.assertGreaterEqual(button.height(), 44)
+
+    def test_edited_connection_is_validated_and_checked_without_installation(self):
+        calls = []
+        w = Wizard(run=lambda args, **kw: calls.append(args) or 0)
+        self.addCleanup(w.close)
+        w.edit_connection({'host': '192.0.2.10', 'port': 22, 'edition': 'root', 'root_variant': 'node012-beta'})
+        entries = w.form.findChildren(QLineEdit)
+        check = next(b for b in w.form.findChildren(QPushButton) if b.text() == 'Check connection again')
+        entries[0].setText('https://invalid')
+        check.click()
+        self.assertIn('Invalid TV address', w.subtitle.text())
+        self.assertEqual(calls, [])
+        entries[0].setText('192.0.2.20')
+        entries[1].setText('2222')
+        check.click()
+        self.pump(lambda: not w.running)
+        args = calls[0]
+        self.assertEqual(args[0], 'doctor')
+        self.assertEqual(args[args.index('--host') + 1], '192.0.2.20')
+        self.assertEqual(args[args.index('--port') + 1], '2222')
+        self.assertEqual(args[args.index('--root-variant') + 1], 'node012-beta')
+        w.edit_connection({'host': '192.0.2.10', 'port': 22, 'edition': 'root', 'root_variant': 'node012-beta'})
+        edition = next(c for c in w.form.findChildren(QComboBox) if c is not w.language)
+        edition.setCurrentIndex(1)
+        next(b for b in w.form.findChildren(QPushButton) if b.text() == 'Check connection again').click()
+        self.pump(lambda: not w.running)
+        self.assertNotIn('--root-variant', calls[1])
+        self.assertEqual(calls[1][calls[1].index('--edition') + 1], 'no-root')
 
     def test_setup_result_requires_all_three_distinct_checks(self):
         w = Wizard(); self.addCleanup(w.close)

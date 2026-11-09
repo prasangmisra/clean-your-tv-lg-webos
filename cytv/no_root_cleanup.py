@@ -6,6 +6,7 @@ the user's project keys or files after the user has requested their removal.
 import json
 import base64
 import hashlib
+from time import monotonic, sleep
 
 from .errors import TVRejected, UserError
 
@@ -20,8 +21,12 @@ PRIVATE_CLEANUP_PROGRAM = r'''
 'use strict';
 var fs=require('fs'),path=require('path'),c=require('constants'),zlib=require('zlib'),crypto=require('crypto');
 var input=JSON.parse(process.argv[process.argv.length-1]),uid=process.getuid();
-if(['inventory','sweep','stop','root-package','stage-carrier','boot-create','boot-probe','boot-retire'].indexOf(input.action)<0)throw Error('invalid-cleanup-action');
+if(['inventory','idle','sweep','stop','root-package','stage-carrier','boot-create','boot-probe','boot-retire'].indexOf(input.action)<0)throw Error('invalid-cleanup-action');
 var base='/media/developer/apps/usr/palm',publicRoot='/media/developer/temp';
+if(input.connection==='root-ssh'){
+ if(uid!==0)throw Error('root-access-required');
+ publicRoot='/var/lib/clean-your-tv-installer';
+}
 var apps=['com.local.nativehome','com.gathin.tvhome','com.cleanyourtv.updater'];
 var services=['com.local.nativehome.service','com.gathin.tvhome.renewal','com.cleanyourtv.updater.service'];
 var reply={schema:1,boot_id:fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim(),present:[],blocked:[],root_present:[],startup_services:[],external_update_hint:null,resident_installer:false,staging_ids:input.staging_ids||[]};
@@ -122,7 +127,41 @@ try{
   try{var transaction=JSON.parse(bytes.toString());if(transaction.schema===1&&['installing','rolling-back','recovery-required'].indexOf(transaction.status)>=0)reply.external_update_hint=transaction.status;}catch(ignored){}
  }
 }catch(ignored){}
-try{var operations='/media/developer/.cytv-installer/operations';if(exists(operations)){ancestry(operations);var ids=fs.readdirSync(operations);reply.resident_installer=ids.length>0;ids.forEach(function(id){if(/^[a-f0-9]{32}$/.test(id)&&reply.staging_ids.indexOf(id)<0)reply.staging_ids.push(id);});if(reply.staging_ids.length>128)fail();}}catch(e){blocked('installer-private',e);}
+var installerRoots=['/media/developer/.cytv-installer','/tmp/.cytv-installer'];
+if(uid===0)installerRoots.push('/tmp/.cytv-installer-root','/var/lib/clean-your-tv-installer');
+else installerRoots.push('/.cytv-installer');
+function privateInstaller(root){
+ if(root!=='/.cytv-installer')return;
+ var s=exists(root);if(!s)return;
+ if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==uid||(s.mode&4095)!==448)fail();
+ for(var p=root;;p=path.dirname(p)){
+  var parent=fs.lstatSync(p);
+  if(!parent.isDirectory()||parent.isSymbolicLink()||(parent.uid!==0&&parent.uid!==uid)||
+     ((parent.mode&18)&&!(parent.uid===0&&(parent.mode&512))))fail();
+  if(path.dirname(p)===p)break;
+ }
+}
+installerRoots.forEach(function(root){try{privateInstaller(root);var operations=root+'/operations';if(exists(operations)){ancestry(operations);var ids=fs.readdirSync(operations);reply.resident_installer=reply.resident_installer||ids.length>0;ids.forEach(function(id){if(/^[a-f0-9]{32}$/.test(id)&&reply.staging_ids.indexOf(id)<0)reply.staging_ids.push(id);});if(reply.staging_ids.length>128)fail();}}catch(e){blocked('installer-private',e);}});
+if(input.action==='idle'){
+ // File absence alone cannot prove that a deleted service or installer stopped.
+ var prefixes=installerRoots.concat([publicRoot+'/cytv-', '/var/lib/clean-your-tv-', '/tmp/cytv-', '/tmp/clean-your-tv-']);
+ apps.forEach(function(app,index){prefixes.push(base+'/applications/'+app,base+'/services/'+services[index]);});
+ reply.idle=true;
+ try{var proc='/proc/',pids=fs.readdirSync(proc).filter(function(pid){return /^[1-9][0-9]*$/.test(pid)&&Number(pid)!==process.pid;});
+  if(pids.length>4096)reply.idle=false;
+  pids.forEach(function(pid){try{
+   var args=fs.readFileSync(proc+pid+'/cmdline','utf8').split('\0').filter(Boolean),argc=args.length;
+   try{args.push(fs.readlinkSync(proc+pid+'/exe').replace(/ \(deleted\)$/,''));}catch(e){if(e.code!=='ENOENT')throw e;}
+   try{args.push(fs.readlinkSync(proc+pid+'/cwd').replace(/ \(deleted\)$/,''));}catch(e){if(e.code!=='ENOENT')throw e;}
+   if(args.some(function(arg){return apps.indexOf(arg)>=0||prefixes.some(function(prefix){return arg===prefix||arg.indexOf(prefix+'/')===0||(/[-]$/.test(prefix)&&arg.indexOf(prefix)===0);});}))reply.idle=false;
+   // Require an unambiguous absolute script. Interpreter flags have too many
+   // inline/combined spellings to infer that an old project body is absent.
+   if(args.some(function(arg){return /(^|\/)(node|python[0-9.]*)$/.test(arg);})&&
+      (argc<2||!/^\/.*[.](js|cjs|mjs|py|pyc)$/.test(args[1])))reply.idle=false;
+  }catch(e){if(e.code!=='ENOENT'||exists(proc+pid))reply.idle=false;}});
+ }catch(e){reply.idle=false;}
+ process.stdout.write(JSON.stringify(reply));return;
+}
 function helperState(state){
  ancestry(path.dirname(state));var s=fs.lstatSync(state);
  // Published Helper accepts legacy shared state0777 when chmod is unavailable.
@@ -149,7 +188,7 @@ if(input.action==='stop'){
  };stopped();return;
 }
 apps.forEach(function(app,index){visit(base+'/applications/'+app,app+' app');visit(base+'/packages/'+app,app+' package');visit(base+'/services/'+services[index],app+' service');});
-visit('/media/developer/.cytv-installer','installer-private');
+installerRoots.forEach(function(root){try{privateInstaller(root);visit(root,'installer-private');}catch(e){blocked('installer-private',e);}});
 // Only fixed project registration names. Existing foreign roles/routes are not
 // inferred to belong to this project merely because they reference an app.
 ['services.d','roles.d','client-permissions.d','api-permissions.d','manifests.d','groups.d'].forEach(function(folder){
@@ -196,6 +235,8 @@ def _device(installer, action, proof=None):
     pending = installer.store.pending(installer.profile) or {}
     request = {'action':action, 'staging_ids':pending.get('cleanup_staging_ids', []),
                'removal':pending.get('removal_operation'), 'proof':proof}
+    if installer.profile.get('connection') == 'root-ssh':
+        request['connection'] = 'root-ssh'
     raw = installer.remote.run('/usr/bin/node', data=_program(request), timeout=90)
     value = json.loads(raw)
     if (not isinstance(value, dict) or value.get('schema') != 1 or
@@ -235,14 +276,79 @@ def _remove_package(installer, app):
         raise
 
 
+def _remove_input_shortcut(installer):
+    """A fixed owned delete can succeed even when the optional list API fails."""
+    def request(method, payload):
+        try:
+            return installer.remote.luna('com.webos.service.eim/' + method, payload)
+        except (TVRejected, ValueError):
+            return {}
+        except UserError as error:
+            if error.reason_code != 'operation-timeout' and str(error) not in (
+                    'TV operation timed out. Run cytv status before retrying.',
+                    'TV command ended without a confirmed result. Run cytv status.'):
+                raise
+            # An optional bus failure is not proof of a working SSH connection.
+            _device(installer, 'inventory')
+            return {}
+    devices = request('getAllInputStatus', {}).get('devices')
+    if (isinstance(devices, list) and all(isinstance(row, dict) and
+            (isinstance(row.get('id'), str) or isinstance(row.get('appId'), str)) for row in devices)
+            and not any(row.get('appId') == APPS[1] or row.get('id') == APPS[1] for row in devices)):
+        return True
+    return request('deleteDevice', {'appId': APPS[1]}).get('returnValue') is True
+
+
+def _restore_home(installer):
+    """Old webOS has an LG Home bar rather than a launchable Home app.
+
+    Only the exact missing-app rejection admits a fresh stock-surface readback.
+    Never infer restored controls from an arbitrary app or a launch receipt.
+    """
+    uri='com.webos.applicationManager/'
+    try:
+        result=installer.remote.luna(uri+'launch', {'id':'com.webos.app.home'})
+    except TVRejected as error:
+        if (error.luna.get('operation')!='application-launch' or error.luna.get('error_code')!=-101
+                or error.luna.get('return_value') is not False):
+            raise
+    else:
+        if isinstance(result,dict) and result.get('returnValue') is True:
+            return
+        raise UserError('Removal could not be checked. Reconnect and try again.', reason_code='controls-unverified')
+    stock={'com.webos.app.home','com.webos.app.livetv',
+           'com.webos.app.hdmi1','com.webos.app.hdmi2','com.webos.app.hdmi3','com.webos.app.hdmi4'}
+    def foreground():
+        reply=installer.remote.luna(uri+'getForegroundAppInfo', {}, timeout=5)
+        app=reply.get('appId') if isinstance(reply,dict) and reply.get('returnValue') is True else None
+        if not isinstance(app,str) or not app:
+            raise UserError('Removal could not be checked. Reconnect and try again.', reason_code='controls-unverified')
+        return app
+    if foreground() in stock:
+        return
+    # Fixed built-in source only; never relaunch an arbitrary observed app.
+    launched=installer.remote.luna(uri+'launch', {'id':'com.webos.app.livetv'})
+    if not isinstance(launched,dict) or launched.get('returnValue') is not True:
+        raise UserError('Removal could not be checked. Reconnect and try again.', reason_code='controls-unverified')
+    deadline=monotonic()+5
+    while foreground() not in stock:
+        if monotonic()>=deadline:
+            raise UserError('Removal could not be checked. Reconnect and try again.', reason_code='controls-unverified')
+        sleep(.1)
+
+
 def _repair_registration(installer, value):
-    """One ordinary same-ID repair per current Retry for protected No-root data."""
+    """One same-ID repair; an uncertain install is never submitted again."""
     from . import no_root_carrier, package
     candidates = {app for row in value['blocked'] if (app := _protected_package(row))}
     if not candidates or not hasattr(installer, 'payload'):
         return value
     registered = {app['id'] for app in installer.installed_apps()}
     for app in sorted(candidates - registered):
+        pending = installer.store.pending(installer.profile)
+        carriers = dict(pending.get('cleanup_carriers', {}))
+        if carriers.get(app) not in (None, 'failed'):
+            raise UserError(ROOT_MESSAGE, reason_code='root-access-required')
         def authenticated(name):
             raw = (installer.payload / package.safe_name(name)).read_bytes()
             if hashlib.sha256(raw).hexdigest() != installer.manifest['files'].get(name):
@@ -265,11 +371,22 @@ def _repair_registration(installer, value):
                    'sha256':hashlib.sha256(carrier).hexdigest(), 'carrier':base64.b64encode(carrier).decode('ascii')}
         installer.remote.run('/usr/bin/node', data=_program(request), timeout=90)
         filename = ('helper.ipk', 'launcher.ipk', 'updater.ipk')[APPS.index(app)]
-        installer.remote.luna('com.webos.appInstallService/dev/install',
-                              {'id':app, 'ipkUrl':'/media/developer/temp/cytv-' + identifier + '/' + filename, 'subscribe':True}, terminal='installed', timeout=150)
+        carriers[app] = 'submitted'
+        installer.store.checkpoint(installer.profile, cleanup_carriers=carriers)
+        try:
+            installer.remote.luna('com.webos.appInstallService/dev/install',
+                                  {'id':app, 'ipkUrl':'/media/developer/temp/cytv-' + identifier + '/' + filename, 'subscribe':True}, terminal='installed', timeout=150)
+        except TVRejected:
+            carriers[app] = 'failed'
+            installer.store.checkpoint(installer.profile, cleanup_carriers=carriers)
+            raise
+        carriers[app] = 'installed'
+        installer.store.checkpoint(installer.profile, cleanup_carriers=carriers)
         if app not in {row['id'] for row in installer.installed_apps()}:
             raise UserError('Removal could not be checked. Reconnect and try again.')
         _remove_package(installer, app)
+        carriers[app] = 'removed'
+        installer.store.checkpoint(installer.profile, cleanup_carriers=carriers)
     return _device(installer, 'sweep')
 
 
@@ -286,8 +403,25 @@ def continue_removal(installer, expected_pending):
     if any(app in apps for app in ('com.cleanyourtv.root.preview', 'com.cleanyourtv.root.updater', 'com.cleanyourtv.system.updater')):
         raise UserError(ROOT_MESSAGE, reason_code='root-access-required')
     if pending.get('stage') == 'verified-clean' and not current['blocked'] and not current['present'] and not apps.intersection(APPS):
+        from .root_no_root_handoff import release
+        release(installer)
         installer.store.finish_clean_removal(installer.profile)
         return {'removed': True, 'verified_clean': True}
+    empty = (pending.get('stage') == 'requested' and not pending.get('previous') and not pending.get('cleanup_boot_proof')
+             and not current['blocked'] and not current['present'] and not apps.intersection(APPS)
+             and not current['startup_services'] and not current['resident_installer'] and not current['external_update_hint'])
+    if empty and _device(installer, 'idle').get('idle') is True and _remove_input_shortcut(installer):
+        _restore_home(installer)
+        final = _device(installer, 'inventory')
+        _check_access(final)
+        if (not final['present'] and not {row['id'] for row in installer.installed_apps()}.intersection(APPS)
+                and _device(installer, 'idle').get('idle') is True):
+            installer.store.checkpoint(installer.profile, stage='verified-clean', removal_reason='removal-verified',
+                                       result={'removed': True, 'verified_clean': True})
+            from .root_no_root_handoff import release
+            release(installer)
+            installer.store.finish_clean_removal(installer.profile)
+            return {'removed': True, 'verified_clean': True}
     def capture_boot():
         # A lost re-arm create response must retry seeding, not compare the new
         # marker against a retired inode from the previous captured baseline.
@@ -335,12 +469,9 @@ def continue_removal(installer, expected_pending):
             startup_failed = True
     if unavailable:
         installer.store.checkpoint(installer.profile, cleanup_startup_unavailable=sorted(unavailable))
-    devices = installer.remote.luna('com.webos.service.eim/getAllInputStatus', {}).get('devices')
-    if not isinstance(devices, list):
-        raise UserError('TV input shortcuts could not be checked. Try again.')
-    if any(device.get('appId') == APPS[1] or device.get('id') == APPS[1] for device in devices):
-        installer.remote.luna('com.webos.service.eim/deleteDevice', {'appId': APPS[1]})
-    installer.remote.luna('com.webos.applicationManager/launch', {'id': 'com.webos.app.home'})
+    inputs_removed = _remove_input_shortcut(installer)
+    installer.store.checkpoint(installer.profile, cleanup_inputs_pending=not inputs_removed)
+    _restore_home(installer)
     installer.store.checkpoint(installer.profile, stage='controls-restored')
     previous = pending.get('previous')
     resident = current.get('resident_installer') is True or current.get('external_update_hint') is not None
@@ -374,8 +505,13 @@ def continue_removal(installer, expected_pending):
     _check_access(final)
     if final['present'] or {app['id'] for app in installer.installed_apps()}.intersection(APPS):
         raise UserError('Some project files remain. Try again to finish removal.')
+    if not inputs_removed:
+        installer.store.checkpoint(installer.profile, removal_reason='controls-unverified')
+        raise UserError('TV input shortcuts could not be checked. Try again.', reason_code='controls-unverified')
     _device(installer, 'boot-retire', proof=proof)
     installer.store.checkpoint(installer.profile, stage='verified-clean', removal_reason='removal-verified',
                                result={'removed': True, 'verified_clean': True})
+    from .root_no_root_handoff import release
+    release(installer)
     installer.store.finish_clean_removal(installer.profile)
     return {'removed': True, 'verified_clean': True}

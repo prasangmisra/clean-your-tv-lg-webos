@@ -11,6 +11,35 @@ an IPK does not prove that Home, recovery or startup works on a particular TV.
 
 ## TV requirements
 
+<a id="next-installer-shared-experimental-home-backend"></a>
+
+### Shared experimental Home backend
+
+The installer also packages the existing guarded KeyFilters Home
+alternative for Node 0.12.2 Root Beta. Ordinary Root and Beta share the same
+selector and capability checks: vendor Qt JavaScript filters, ARM32 native Home
+and compatible input/recovery are required when System Profile is explicitly absent.
+SDK numbers are recorded, not used as an allowlist. A KeyFilters setting alone
+is insufficient: firmware with an in-compositor Home ribbon or another stock
+Home implementation is refused. Compatibility on the #410 TV is unconfirmed. Both
+experimental Home variants retain fresh-install restrictions and disabled OTA.
+See [backend and verification limits](development/C1-NATIVE-GATE.md#shared-root-runtime-variants-unpublished-beta-packaging).
+
+### Release 1.12.0: legacy Root choices
+
+The 1.12.0 installer includes a separate, explicitly selected **Root Beta
+for exactly Node.js 0.12.2**. It also offers **No-root using existing root SSH**
+when ordinary Root rejects an identified older Node version. The fallback keeps
+Home/Helper's own runtime and ARM32 checks; it does not install Developer Mode
+over root. Unknown or unreadable Node output does not authorize either path.
+
+Beta leaves system Node unchanged, retains Python/vendor module/Home checks and
+blocks ordinary OTA. Host checks do not establish native LS2 registration, Home,
+emergency, audio, power or rollback compatibility on any TV, including #383.
+For release1.12.0 the maintainer explicitly deferred physical Beta testing;
+this is an unverified Beta limitation, not compatibility evidence or a passing
+#383 outcome. [Selected checks and limits](history/2026-11-07-release-1.12.0-scoped-qa.md). See [implementation and testing](development/ROOT-NODE-PROTOTYPE.md#unreleased-installer-beta).
+
 Release 1.5.4 includes Home Helper 0.6.21 with TV Node.js 0.10.25+ support for
 [#152](https://github.com/Razdva122/clean-your-tv-lg-webos/issues/152).
 Root still requires Node.js 8+. Host runtime tests do not establish EF950V
@@ -22,7 +51,7 @@ Do not bypass a failed runtime gate.
 | | No-root | Root |
 | --- | --- | --- |
 | Access | Active LG Developer Mode, Key Server and local networking | Existing root, trusted root SSH and compatible Homebrew services |
-| TV runtime | Node.js 0.10.15+ for the compiled Helper 0.7.4 in published 1.8.2 | Node.js 8+ and Python 3.9+ with the required modules |
+| TV runtime | Node.js 0.10.15+ for the compiled Helper (published 0.8.0) | Node.js 8+ and Python 3.9+ with the required modules |
 | Input | Compatible remote devices and native input access | Supported ARM32 userspace and compatible Magic Remote input |
 | Ongoing requirement | Keep Developer Mode active and Helper pairing/networking available | Keep independent recovery services and their referenced runtime intact |
 
@@ -56,13 +85,34 @@ Helper-free first-install mode promising that behavior.
 
 [Exact hashes, runtime cases, packaging and limits](history/2026-11-04-webos1-node-floor.md).
 
+## User-reported working TVs
+
+<!-- compatibility-reports:start -->
+- OLED65G19LA — No-root — firmware 03.53.45 — webOS SDK 6.5.3 — v1.5.4
+- OLED55B19LA — No-root — firmware 03.53.45 — webOS 6; SDK 6.5.3 — v1.11.0
+- OLED55G36LA — No-root — firmware 23.25.40 — webOS SDK 9.2.2
+- OLED55B36LA — No-root — firmware 33.31.75 — webOS SDK 10.3.2
+- OLED83G36LA — No-root — firmware 43.21.71 — webOS SDK 11.2.0 — v1.13.0
+- 55SK8100PLA — No-root — firmware 05.50.70 — webOS 4; SDK 4.4.0
+- 50NANO80ASA — No-root — firmware 33.31.80 — webOS 25; SDK10.3.2
+- UN70006LA — No-root — firmware 04.64.00 — v1.2.0
+- OLED65C3PUA — No-root — firmware 43.21.96
+- OLED55C3RLA — Root — firmware 43.21.71 — webOS SDK11.2.0 — v1.13.0
+- 55UR91006LA — No-root — firmware 33.31.75 — webOS SDK10.3.2 — v1.11.0
+- OLED55C2PUA — No-root — firmware 33.31.68 — webOS 10.3.1 / build 3006
+- LG C3 — No-root — webOS 26
+- LG C5 77″ — No-root
+<!-- compatibility-reports:end -->
+
+These are reports for the listed configurations, not a guarantee for every firmware or test case. Unreported versions are omitted. Earlier failures and untested paths remain in the evidence below.
+
 ## What has been tested
 
 | Configuration | Evidence and limits |
 | --- | --- |
-| OLED55C3RLA / firmware 43.21.71, Root | [1.6.0 scoped acceptance](history/2026-11-02-release-1.6.0-final-acceptance.md): controls, fault recovery and genuine Homebrew failsafe, with the documented standby presentation limitation. Earlier [published 1.4.0 acceptance](RELEASE-1.4.0-ACCEPTANCE.md): corrected startup, controls, standby/cold-boot cases and manual whole-product rollback in the recorded scope. No guarantee of immediate first-screen startup or other models. |
+| OLED55C3RLA / firmware 43.21.71, Root | [v1.13.0 exact-artifact acceptance](history/2026-11-08-release-1.13.0-artifacts.md): signed update/rollback/forward through retained System 1.2.5, physical short/triple Home, remote off/on, AC cold boot and audible playback. [Exact Helper transition](history/2026-11-08-helper-0.8.0-compatibility.md) is separate No-root evidence. Earlier [1.6.0](history/2026-11-02-release-1.6.0-final-acceptance.md) and [1.4.0](RELEASE-1.4.0-ACCEPTANCE.md) observations retain their original scope. No guarantee of immediate first-screen startup or other models. |
 | OLED55C46LA (C4), No-root | Earlier community Helper results have outstanding firmware/input and long-Back confirmation. [Original reports](history/COMPATIBILITY.md#historical-110-hardware-evidence). |
-| C5 / webOS 26; BX / webOS 5; UK6540PTD | Unresolved or unverified paths remain. Do not infer support from another model or an architecture check. |
+| Specific C5 / webOS 26, BX / webOS 5 and UK6540PTD reports | Unresolved or unverified paths remain on the reporting devices. Positive reports above belong to their own configurations; they do not resolve a different owner’s failure. |
 | Other models, firmware and remotes | Unverified until their actual controls and recovery paths are checked. |
 | Android | Scoped Android 15 ARM64 / WebView 124 emulator acceptance, including native recovery fixtures; physical phones, minimum-version devices and live phone-to-TV recovery remain unverified. [1.6.0 evidence and limits](history/2026-11-02-release-1.6.0-final-acceptance.md); [readiness details](../android/STABLE-READINESS.md). |
 

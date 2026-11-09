@@ -49,6 +49,40 @@ class RootGateTests(unittest.TestCase):
         (self.folder/'bundle.json').write_text(json.dumps({'package':self.ipk,'files':files}))
         self.manifest={'root_backends':{BACKEND:{'experimental':True,'hardware_validated':False,'graphics':{'1920x1080':'root-c1','1280x720':'root-c1-720p'}}},'files':{self.variant+'/'+p.relative_to(self.folder).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in self.folder.rglob('*') if p.is_file()}}
         if hasattr(self,'installer'):self.installer.manifest=self.manifest
+
+    def test_generic_admission_cannot_install_legacy_mount_payload(self):
+        self.installer.tv_info['home_backend_schema']=3
+        with self.assertRaises(UserError):
+            root_gate.install(self.installer,self.inventory)
+        self.assertIsNone(self.store.pending(self.profile))
+        self.assertEqual(self.remote.uploads,{})
+
+    def test_runtime_variant_cannot_cross_normal_and_beta_payloads(self):
+        path = self.folder/'release.json'
+        original = json.loads(path.read_bytes())
+        for profile_variant, release_variant in ((None, 'node012-beta'), ('node012-beta', None)):
+            with self.subTest(profile=profile_variant, release=release_variant):
+                self.profile.pop('root_variant', None)
+                if profile_variant:
+                    self.profile['root_variant'] = profile_variant
+                release = dict(original)
+                if release_variant:
+                    release['runtime_variant'] = release_variant
+                path.write_text(json.dumps(release))
+                self.refresh()
+                with self.assertRaises(UserError):
+                    root_gate.install(self.installer,self.inventory)
+                self.assertEqual(self.remote.uploads,{})
+                self.assertIsNone(self.store.pending(self.profile))
+    def test_verified_clean_handoff_uses_current_coordinator_without_old_driver_replay(self):
+        self.installer._native_clean_install=True
+        self.installer.upload_product=Mock(return_value='/tmp/cytv-product-'+'a'*32)
+        self.installer.product_action=Mock(return_value={'state':'complete','result':{'returnValue':True,'installed':package.ROOT_APP,'home_changed':False}})
+        result=root_gate.install(self.installer,self.inventory)
+        self.assertTrue(result['home_changed'])
+        self.assertEqual(self.installer.product_action.call_args.args[0],'native-install')
+        self.assertNotIn('install',self.actions)
+
     def action(self,action,**kwargs):
         self.actions.append((action,kwargs))
         if self.failure==action:raise RuntimeError('interrupted '+action)

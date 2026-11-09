@@ -48,6 +48,7 @@ from cytv.package import ipk
 assert Path('build/home-service/state/home-control/.keep').is_file()
 assert Path('build/home-service/theme-receiver/core.js').is_file()
 assert Path('build/home-service/theme-receiver/register.js').is_file()
+assert Path('build/home-service/weather.js').is_file()
 files={'usr/palm/services/com.gathin.tvhome.renewal/state/home-control/.keep':b''}
 Path('dist/com.gathin.tvhome_9.8.7_all.ipk').write_bytes(ipk('com.gathin.tvhome','9.8.7',files))
 ''')
@@ -120,6 +121,30 @@ arch = 'arm' if helper else 'all'
                              'usr/palm/services/com.local.nativehome.service/state'):
                     entry = archive.getmember(name)
                     self.assertEqual((entry.uid, entry.gid, entry.mode), (5999, 5000, 0o770))
+
+    def test_home_and_updater_payloads_include_compiled_service_runtime(self):
+        import runpy
+        from cytv.package import data_files
+        build = runpy.run_path(str(ROOT/'scripts/build-cytv.py'))
+        for folder, app_id, service_id in (
+                ('renewal-service', 'com.gathin.tvhome', 'com.gathin.tvhome.renewal'),
+                ('updater-service', 'com.cleanyourtv.updater', 'com.cleanyourtv.updater.service')):
+            with self.subTest(service=service_id):
+                app = {'appinfo.json': json.dumps({'id':app_id,'version':'9.8.7'}).encode()}
+                service = build['tracked_files'](folder)
+                if folder == 'updater-service':
+                    service['user-data.js'] = (ROOT/'launcher/user-data.js').read_bytes()
+                files = data_files(build['pack_app'](app, service))
+                prefix = 'usr/palm/services/'+service_id+'/'
+                for name in ('compat-runtime.js', 'compat-polyfills.js', 'compat-buffer.js', 'compat-LICENSE.txt'):
+                    self.assertIn(prefix+name, files)
+                self.assertIn(b"require('./compat-runtime')", files[prefix+'service.js'])
+                if folder == 'renewal-service':
+                    self.assertIn(prefix+'theme-receiver/core.js', files)
+                    self.assertIn(prefix+'weather.js', files)
+                    self.assertEqual(files[prefix+'ca-bundle.crt'], (ROOT/'renewal-service/ca-bundle.crt').read_bytes())
+                    self.assertEqual(files[prefix+'ca-LICENSE.txt'], (ROOT/'renewal-service/ca-LICENSE.txt').read_bytes())
+                    self.assertEqual(files[prefix+'state/home-control/.keep'], b'')
 
     def test_home_archive_sets_only_the_two_owned_state_directories(self):
         from cytv.package import ipk, read_ar

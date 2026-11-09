@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import sys
+from time import sleep
 
 from . import __version__, package, state, i18n
 from .errors import UserError, TVNotReady, ExistingRoot
@@ -49,10 +50,14 @@ def parser():
     result.add_argument('--host', help=i18n.translate('TV IPv4 address or hostname'))
     result.add_argument('--no-discovery', action='store_true', help=i18n.translate('Skip local network discovery and enter a TV address manually'))
     result.add_argument('--edition', choices=('no-root', 'root'))
+    result.add_argument('--tv-name', type=package.normalize_tv_name, help=i18n.translate('Launcher name shown while loading (default: Home)'))
+    result.add_argument('--connection', choices=('root-ssh',), help=i18n.translate('No-root: use existing root SSH without Developer Mode'))
+    result.add_argument('--root-variant', choices=('node012-beta',), help=i18n.translate('Root: select the experimental Node.js 0.12.2 payload'))
     result.add_argument('--port', type=int, help=i18n.translate('SSH port (No-root: 9922; Root: 22)'))
     result.add_argument('--identity', type=Path, help=i18n.translate('Existing Root SSH private key'))
     result.add_argument('--data-dir', type=Path, help=i18n.translate('Private local profile directory'))
     result.add_argument('--non-interactive', action='store_true', help=i18n.translate('Never prompt; needs a saved, trusted connection'))
+    result.add_argument('--use-bundled-version', action='store_true', help=i18n.translate('Non-interactive install: explicitly use this installer even if a newer version is available'))
     result.add_argument('--yes', action='store_true', help=i18n.translate('Accept install/remove summary; does not accept SSH trust'))
     result.add_argument('--migrate-home', action='store_true', help=i18n.translate('Root install: explicitly import existing Home packaged/profile data'))
     result.add_argument('--check-payload', action='store_true', help=i18n.translate('Verify embedded release assets without contacting a TV'))
@@ -71,6 +76,9 @@ def explain_failure(write, store, profile, phase, error):
         write.failure_help(help)
         if help['code'] in ('removal-not-submitted','no-root-recovery'):
             write.recovery(profile)
+        if phase != 'recover' and pending and pending.get('action') in ('install', 'activate-root'):
+            from .recovery import offer_install_recovery
+            offer_install_recovery(write, store, profile)
     return help
 
 
@@ -134,22 +142,28 @@ def choose_profile(args, store, ask, write, search, inspect):
             choice = prompts.number(ask, write, f'Edition [{default_choice}]: ', 1, 2, default=default_choice)
             edition = 'no-root' if choice == 1 else 'root'
         try:
-            profile = state.target(host, edition, args.port, args.identity)
+            profile = state.target(host, edition, args.port, args.identity, args.connection, args.root_variant)
         except ValueError:
             raise UserError('Invalid TV address or port. Use an IPv4 address or hostname and a port from 1 to 65535.') from None
         # Match saved credentials, including the identity, when targeting a known TV explicitly.
-        for saved in profiles:
-            if all(saved[k] == profile[k] for k in ('host', 'edition', 'port')):
-                profile = dict(saved)
-                break
+        matches = [saved for saved in profiles if saved['host'] == host and saved['edition'] == edition
+                   and (args.port is None or saved['port'] == profile['port'])
+                   and (args.connection is None or saved.get('connection') == args.connection)
+                   and (args.root_variant is None or saved.get('root_variant') == args.root_variant)]
+        if len(matches) == 1:
+            profile = dict(matches[0])
     if args.port is not None:
         profile['port'] = args.port
     if args.identity:
         profile['identity'] = str(args.identity.expanduser().resolve())
+    if args.connection:
+        profile['connection'] = args.connection
+    if args.root_variant:
+        profile['root_variant'] = args.root_variant
     return state.target(**profile)
 
 
-def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass, search=None, inspect=None, payload_root=None):
+def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass, search=None, inspect=None, payload_root=None, check_updates=False):
     # Preserve the terminal/file encoding; escape unsupported text instead of
     # aborting setup or even --help on redirected legacy Windows streams.
     for stream in (sys.stdout, sys.stderr):
@@ -188,6 +202,8 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
     remote = None
     store, profile, phase, tv_info = state.Store(args.data_dir), None, 'select-tv', {'frontend':getattr(write,'frontend','console')}
     try:
+        if args.tv_name is not None and args.command != 'install':
+            raise UserError('--tv-name applies only to installation.')
         if args.new_recovery_attempt and (args.command != 'recover-system-rollback' or args.edition == 'no-root'):
             raise UserError('--new-recovery-attempt applies only to Root rollback recovery.')
         if args.repair_package_permissions and (args.command!='enable-firmware-access' or args.edition=='no-root'):
@@ -226,6 +242,7 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
             return info
 
         profile = choose_profile(args, store, ask, write, search or discovery.find_tvs, inspect_connection)
+        write.selected_profile(profile)
         if args.command == 'replace-system-updater':
             if profile['edition'] != 'root': raise UserError('System Updater replacement requires an existing Root connection.')
             if store.pending(profile): raise UserError('Previous operation is unresolved. Run cytv status or cytv restore; do not retry installation.', reason_code='pending-operation')
@@ -240,13 +257,18 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                 raise UserError('WAM cleanup requires an existing Root SSH connection.')
             if store.pending(profile):
                 raise UserError('Resolve the pending installation or removal before clearing WAM data. Keep recovery records.')
+        if check_updates and args.command == 'install' and not store.pending(profile):
+            from .installer_update import offer
+            if not offer(ask, write, args.non_interactive, args.use_bundled_version):
+                return 0
         if args.command == 'install':
             phase = 'prepare-payload'
             write.step(3, 'Prepare the TV connection')
             if profile['edition'] == 'root':
                 write('Root requires existing root and SSH access.')
-                write('Hardware validation: LG C3; other models are unverified.')
-            else:
+                if not profile.get('root_variant'):
+                    write('Hardware validation: LG C3; other models are unverified.')
+            elif profile.get('connection') != 'root-ssh':
                 write('Developer Mode lets CYTV install apps on a TV without root.')
                 write('Home is your app screen. Home Helper makes the Home button open it.')
                 write.heading('1. Developer Mode')
@@ -259,10 +281,12 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                 write('Keep Developer Mode active: open it before the timer runs out and press EXTEND while the TV is online. If it expires, LG can remove these apps.')
             write.step(4, 'Review and install', clear=profile['edition'] == 'root')
             write('TV: ' + profile['host'])
-            write('Edition: ' + ('Root' if profile['edition'] == 'root' else 'No-root'))
+            write('Edition: ' + ('Root Beta (Node.js 0.12.2)' if profile.get('root_variant') else
+                                'Root' if profile['edition'] == 'root' else 'No-root'))
             write('SSH port: ' + str(profile['port']))
             if profile['edition'] == 'root':
-                write('Hardware validation: LG C3; other models are unverified.')
+                if not profile.get('root_variant'):
+                    write('Hardware validation: LG C3; other models are unverified.')
                 write('Automatic SSH sign-in first; credentials only if needed.')
             write('Next: verify SSH, read your apps, then install.')
             if profile['edition']=='no-root':
@@ -286,7 +310,7 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
         # Canonicalize the selected local build root (macOS /var is an OS
         # alias); authenticated support members still reject indirect children.
         payload, manifest = (Path(payload_root) if payload_root is not None else payload_dir()).resolve(), {}
-        if args.command in ('install', 'enable-system-updates','enable-firmware-access','disable-firmware-access','replace-system-updater'):
+        if args.command in ('install', 'enable-system-updates','enable-firmware-access','disable-firmware-access','replace-system-updater') or profile.get('root_variant'):
             try:
                 manifest = package.verify_payload(payload)
             except FileNotFoundError:
@@ -323,6 +347,12 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
         from .transport import SSH, CredentialPrompt
         with store.lock(profile), diagnostics.context.operation_context(store, profile):
             profile, recovering = store.connection_profile(profile)
+            # An explicit sign-in key may change; the saved TV identity and pin
+            # must still be resolved and verified before using it.
+            if (recovering and args.identity and args.command == 'uninstall'
+                    and (profile['edition'] == 'root' or profile.get('connection') == 'root-ssh')
+                    and (store.pending(profile) or {}).get('recovery_protocol') == 'clean-removal-v1'):
+                profile = dict(profile, identity=str(args.identity.expanduser().resolve()))
             if args.command=='uninstall':
                 if not recovering:store.save(profile)
                 store.request_clean_removal(profile)
@@ -343,22 +373,33 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                 checks.prepare(profile['edition'], args.command)
             checks.update('ssh', 'running')
             write('Connecting to the TV…')
-            if connect:
-                # Older embedders accept exactly four positional arguments.
-                import inspect as signature_inspect
-                options = {}
-                if recovering:
-                    try:
-                        signature_inspect.signature(connect).bind(profile, store.device_dir(profile), secret_with_help, trust, persist=False)
-                        options['persist'] = False
-                    except TypeError:
-                        pass
-                remote = connect(profile, store.device_dir(profile), secret_with_help,
-                                 (lambda *_: False) if recovering else trust, **options)
-            else:
-                remote = SSH.connect(profile, store.device_dir(profile), secret_with_help, trust,
-                                     identity_prompt=None if recovering or args.non_interactive else lambda: prompts.root_credentials(ask, write),
-                                     persist=not recovering)
+            def connect_tv(pinned):
+                if connect:
+                    # Older embedders accept exactly four positional arguments.
+                    import inspect as signature_inspect
+                    options = {}
+                    if pinned:
+                        try:
+                            signature_inspect.signature(connect).bind(profile, store.device_dir(profile), secret_with_help, trust, persist=False)
+                            options['persist'] = False
+                        except TypeError:
+                            pass
+                    return connect(profile, store.device_dir(profile), secret_with_help,
+                                   (lambda *_: False) if pinned else trust, **options)
+                return SSH.connect(profile, store.device_dir(profile), secret_with_help, trust,
+                                   identity_prompt=None if pinned or args.non_interactive else lambda: prompts.root_credentials(ask, write),
+                                   persist=not pinned)
+
+            from .errors import connection_interrupted
+            for attempt in range(3 if cleanup else 1):
+                try:
+                    remote = connect_tv(recovering)
+                    break
+                except Exception as error:
+                    if not cleanup or attempt == 2 or not connection_interrupted(error):
+                        raise
+                    write('Connecting to the TV…')
+                    sleep(attempt + 1)
             checks.update('ssh', 'pass')
             if not recovering and args.command in ('install', 'status', 'doctor', 'recover'):
                 diagnostics.context.collect_metadata(remote, tv_info)
@@ -368,49 +409,71 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                 if pending and pending.get('recovery_protocol')=='clean-removal-v1' and pending.get('connection_pending') is True:
                     store.checkpoint(profile,connection_pending=False)
             installer = Installer(remote, store, profile, payload, manifest, write, tv_info=tv_info, checks=checks)
+            def reconnect_tv():
+                nonlocal remote
+                if remote is not None:
+                    remote.close()
+                    remote = None
+                remote = connect_tv(True)
+                return remote
+            installer.reconnect = reconnect_tv
             if args.command == 'install':
                 reinstall = None
                 resume = False
-                if store.pending(profile):
+                pending = store.pending(profile)
+                replacing_activation = (profile['edition'] == 'root' and pending
+                    and pending.get('action') == 'activate-root'
+                    and pending.get('home_backend') != 'c1-native-gate')
+                if pending and not replacing_activation:
                     from .recovery import recover
                     phase = args.command = 'recover'
                     recover(installer, ask, write, args.non_interactive)
                     diagnostics.save_result(write, store, 'recover', profile, phase, tv_info,
                                             checks=checks.results, status=tv_info.get('status'))
                     return 0
+                from .root_runtime import require_idle, BETA, NOTICE
+                require_idle(store, profile, replacing=pending if replacing_activation else None)
+                if profile.get('root_variant') == BETA:
+                    write(NOTICE)
+                    if args.non_interactive or not prompts.confirm('Install experimental Root Beta?', ask, write):
+                        raise EOFError
                 if profile['edition'] == 'root' and not resume:
                     installer.select_graphics()
                     phase = 'inspect-installation'
                     try:
-                        installer.preflight(install=True, home_interfaces=True)
+                        if replacing_activation:
+                            reinstall = 'installed'
+                        else:
+                            installer.preflight(install=True, home_interfaces=True)
                     except ExistingRoot:
                         if tv_info.get('home_backend') == 'c1-native-gate':
                             raise UserError('Root is already installed or recovery state remains. Use cytv status or cytv restore; reinstallation has not started.')
+                        reinstall = 'installed'
+                    except UserError as error:
+                        if (error.reason_code != 'root-requirements' or profile.get('root_variant')
+                                or tv_info.get('root_requirements', {}).get('node-version') != 'fail'):
+                            raise
                         if args.migrate_home:
-                            raise UserError('For Root reinstallation, omit --migrate-home. cytv will read a fresh TV inventory before replacing Root; the existing installation was left unchanged.')
-                        existing = installer.status()
-                        stage = existing.get('deployment_stage')
-                        device = existing.get('device', {}).get('result', {})
-                        if device.get('backend') == 'c1-native-gate':
-                            raise UserError('Root is already installed or recovery state remains. Use cytv status or cytv restore; reinstallation has not started.')
-                        if stage == 'installed-recovery-only' and device.get('recovery', {}).get('integrity_verified') is True:
-                            reinstall = 'installed'
-                        elif stage == 'uninstalled-state-retained':
-                            reinstall = 'removed'
-                        else:
-                            raise UserError('Previous Root installation needs recovery. Run cytv status or cytv restore. Reinstallation has not started; recovery data was left unchanged.')
-                        if args.non_interactive:
-                            raise UserError('Root is already installed or removal data remains. Run cytv interactively to review reinstallation. --yes does not approve replacing Root.')
-                        write.heading('Versions on the TV → versions in this installer')
-                        for row in installer.version_summary():
-                            write(row)
-                        write.heading('Root is already installed' if reinstall == 'installed' else 'Previous Root was removed')
-                        write('You can reinstall using the packages in this cytv build.')
-                        write('LG Home will be restored first. Previous recovery data will be archived on the TV.')
-                        write('Root preferences may be reset. Your other TV apps will stay installed.')
-                        if not prompts.confirm('Reinstall Root?', ask, write):
-                            write('Existing Root and recovery data left unchanged.')
-                            return 0
+                            raise UserError('Choose an alternative edition without --migrate-home. Installation has not started.')
+                        from .root_runtime import offer
+                        offer(installer, args, ask, write)
+                        installer.select_graphics()
+                        installer.preflight(install=True, home_interfaces=profile['edition']=='root')
+                if reinstall:
+                    if args.migrate_home:
+                        raise UserError('For Root reinstallation, omit --migrate-home. The installer reads a fresh TV inventory before replacing Root.')
+                    if args.non_interactive:
+                        raise UserError('Root is already installed or recovery state remains. Run the installer interactively to confirm reinstallation. --yes does not approve replacing Root.')
+                    write.heading('Versions on the TV → versions in this installer')
+                    for row in installer.version_summary():
+                        write(row)
+                    write.heading('Reinstall Root using this installer')
+                    write('LG Home will be restored. Clean Your TV, its updaters, Home Helper and saved preferences will be removed.')
+                    write('After removal is verified, the packages and Root runtime in this installer will be installed and activated. Your other TV apps and existing root access stay in place.')
+                    write('Earlier recovery records are kept on this computer. If removal cannot finish, the new installation will not start.')
+                    if not prompts.confirm('Reinstall Root?', ask, write):
+                        write('Existing Root and recovery data left unchanged.')
+                        return 0
                 if not reinstall and not resume:
                     phase = 'inspect-installation'
                     write.heading('Versions on the TV → versions in this installer')
@@ -419,15 +482,34 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                     if not args.yes and not prompts.confirm('Install these versions?', ask, write, default=True):
                         write('Cancelled. No TV changes were made.')
                         return 0
+                if profile['edition'] == 'no-root':
+                    phase = 'inspect-installation'
+                    while True:
+                        try:
+                            installer.preflight(install=True)
+                            break
+                        except UserError as error:
+                            if error.reason_code != 'helper-running' or args.non_interactive:
+                                raise
+                            write.heading('Stop Home Helper on the TV')
+                            write('Press Home three times within two seconds (older Helper: hold Home for two seconds), then release all buttons and wait for LG Home.')
+                            if not prompts.confirm('Try stopping Helper again?', ask, write, default=True):
+                                write('Cancelled. No TV changes were made.')
+                                return 0
                 if not resume:
                     installer.select_graphics()
+                    installer.tv_name = (args.tv_name if args.tv_name is not None else
+                                         'Home' if args.non_interactive or args.yes else prompts.tv_name(ask, write))
                 phase = 'read-inventory'
                 inventory, key = None, None
                 if not args.migrate_home and not resume:
                     if profile['edition']=='root':
                         checks.update('inventory','running','')
                         inventory=installer.root_inventory((payload/'fallback.png').read_bytes())
-                        checks.update('inventory','pass')
+                        if installer.tv_info.get('root_inventory',{}).get('inputs')=='unavailable':
+                            checks.update('inventory','unknown','Warning: TV inputs could not be read. Continuing with applications only.')
+                        else:
+                            checks.update('inventory','pass')
                     else:
                         from .tv import SSAP
                         while True:
@@ -438,7 +520,12 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                                     checks.update('pairing', 'pass')
                                     phase = 'read-inventory'
                                     checks.update('inventory', 'running', '')
-                                    inventory = tv.inventory((payload / 'fallback.png').read_bytes())
+                                    try:
+                                        inventory = tv.inventory((payload / 'fallback.png').read_bytes())
+                                    finally:
+                                        icon_counts = getattr(tv, 'icon_diagnostics', None)
+                                        if type(icon_counts) is dict:
+                                            tv_info['icon_inventory'] = icon_counts
                                     key = tv.key
                                     checks.update('inventory', 'pass')
                                 break
@@ -484,6 +571,8 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                         write('Root activation and the launch request completed. Check the separate startup and physical Home results.')
                     if result.get('updates_ready'):
                         write('Root Updater is ready. Install future compatible updates in Settings → Software updates on the TV.')
+                    if profile.get('root_variant') == 'node012-beta':
+                        write(NOTICE)
                     if result.get('backend') == 'c1-native-gate':
                         write('C1 Beta is installed. Automatic updates are unavailable; after a stop, turn Home control on again in TV settings.')
                     else:
@@ -494,8 +583,11 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                     write("After installation, press Home to try it. If LG Home opens, open Home Helper from the TV's apps.")
                     write('Three short Home presses within two seconds return to LG Home. To restart Home control, open Home Helper, choose Start Helper and confirm. Your saved Home screen choice is kept.')
                     write('Packages installed; Home Helper launch requested. Check short Home, arrows/OK, Back, volume, standby and cold boot.')
-                    write('Emergency exit: three short Home presses within two seconds. Keep Developer Mode active. The computer can now be switched off.')
-                    write('Keep Developer Mode active: open it before the timer runs out and press EXTEND while the TV is online. If it expires, LG can remove these apps.')
+                    if profile.get('connection') == 'root-ssh':
+                        write('No-root is installed using root SSH. Keep this saved connection for status, recovery and removal.')
+                    else:
+                        write('Emergency exit: three short Home presses within two seconds. Keep Developer Mode active. The computer can now be switched off.')
+                        write('Keep Developer Mode active: open it before the timer runs out and press EXTEND while the TV is online. If it expires, LG can remove these apps.')
             elif args.command == 'recover':
                 from .recovery import recover
                 phase = 'recover'
@@ -568,7 +660,10 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
                                          'summary':'Clean Your TV removal is verified.','next_step':'Other TV apps stay installed.'})
                     write.heading('Clean Your TV removed')
                     write('Clean Your TV removed. Its apps, startup and Home-button control were removed.')
-                    write('Only ownership backups and minimal removal records were kept.')
+                    if result.get('temporary_files_retained'):
+                        write('Some temporary files were kept; they do not prevent reinstallation.')
+                    else:
+                        write('Only ownership backups and minimal removal records were kept.')
                 elif result.get('restart_required') is True:
                     from .recovery import removal_plan
                     removal_plan(write,store,profile,state='waiting')
@@ -591,8 +686,8 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
         return 0
     except (EOFError, KeyboardInterrupt, StopIteration):
         checks.finish_running(cancelled=True)
-        write('Cancelled. Installation has not started.' if args.command == 'install' and phase in ('pair-tv', 'read-inventory', 'prepare-payload', 'select-tv', 'select-edition', 'inspect-tv', 'ssh-connect', 'inspect-installation')
-              else 'Cancelled. If an installation was submitted, run cytv status before retrying.')
+        from .recovery import cancelled
+        cancelled(write, store, profile, args.command, phase, tv_info, checks.results)
         return 130
     except UserError as exc:
         checks.finish_running()
@@ -625,14 +720,22 @@ def main(argv=None, ask=input, write=print, connect=None, secret=getpass.getpass
         diagnostics.suggest_issue(write, store, args.command, profile, phase, exc, tv_info, checks=checks.results, status=tv_info.get('status'))
         return 1
     finally:
+        if profile and profile.get('root_variant') == 'node012-beta' and args.command == 'install':
+            from .root_runtime import FEEDBACK
+            write(FEEDBACK)
         if remote is not None:
             remote.close()
+
+
+def interactive_main(*args, **kwargs):
+    """Computer frontends opt into the public release advisory before TV changes."""
+    return main(*args, check_updates=True, **kwargs)
 
 
 def entry():
     # Keep the console visible when a frozen Windows executable is opened from Explorer.
     launched_without_args = getattr(sys, 'frozen', False) and sys.platform == 'win32' and len(sys.argv) == 1
-    code = main()
+    code = interactive_main()
     if launched_without_args:
         try:
             input(i18n.translate('\nPress Enter to close…'))

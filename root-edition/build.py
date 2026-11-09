@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """Build an offline, isolated Root candidate IPK from the public UI sources."""
 import argparse
-import gzip
 import hashlib
 import json
 from pathlib import Path
-import tarfile
 import sys
 import struct
 
 import preview
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.tv_web_build import compile_web
-from cytv.package import IPK_MTIME, ar
+from cytv.package import ar
 
 
 SERVICE_ID = 'com.cleanyourtv.root.preview.service'
@@ -69,13 +67,35 @@ def bundle_c1_lease(files):
     return files
 
 
+def bundle_weather(files):
+    """Inline the shared fixed MET transport and trust in the owned service leaf."""
+    import re
+    from deploy import checked_file
+    files = dict(files)
+    needle = b"require('./weather')"
+    if files['service.js'].count(needle) != 1:
+        raise ValueError('Expected one Root weather registration')
+    root = Path(__file__).resolve().parents[1] / 'renewal-service'
+    source = checked_file(root, 'weather.js')
+    ca = checked_file(root, 'ca-bundle.crt').decode('utf-8')
+    license = checked_file(root, 'ca-LICENSE.txt').replace(b'*/', b'* /')
+    pattern = rb"require\('fs'\)\.readFileSync\(\s*__dirname \+ '/ca-bundle.crt',\s*'utf8'\s*\)"
+    source, count = re.subn(pattern, lambda _: json.dumps(ca).encode(), source)
+    if count != 1:
+        raise ValueError('Expected one canonical weather CA import')
+    bundled = (b'(function(){var module={exports:{}};\n/* Mozilla CA bundle license\n'
+               + license + b'\n*/\n' + source + b'\nreturn module.exports;}())')
+    files['service.js'] = files['service.js'].replace(needle, bundled)
+    return files
+
+
 def tgz(files, executables=()):
     """Secure owned package leaves, without chmod records for platform containers."""
     from cytv.package import tgz as package_tgz
     return package_tgz(files, executable=executables)
 
 
-def build(output, version='0.0.1', legacy_node_prototype=False, resolution=None, experimental_c1_gate=None, experimental_c1_keyfilter=None):
+def build(output, version='0.0.1', legacy_node_prototype=False, resolution=None, experimental_c1_gate=None, experimental_c1_keyfilter=None, legacy_node_beta=False, c1_mount_recovery=None):
     output = Path(output).absolute()
     if '..' in output.parts or any(path.is_symlink() for path in (output, *output.parents)):
         raise ValueError('Output must not traverse symlinks or parent segments')
@@ -89,8 +109,16 @@ def build(output, version='0.0.1', legacy_node_prototype=False, resolution=None,
         candidate = Path(experimental_helper).absolute()
         native_gate = checked_file(candidate.parent, candidate.name)
         validate_native_gate(native_gate)
-        if legacy_node_prototype:
-            raise ValueError('Experimental C1 gate does not admit the legacy Node prototype')
+        if legacy_node_prototype or (legacy_node_beta and not keyfilter):
+            raise ValueError('Legacy Node Beta only admits mount-free compositor routing; the host prototype is not admitted')
+    recovery_gate = None
+    if c1_mount_recovery is not None:
+        if not keyfilter or legacy_node_beta:
+            raise ValueError('Legacy mount recovery is installer-only support for the current native bundle')
+        from deploy import checked_file
+        candidate = Path(c1_mount_recovery).absolute()
+        recovery_gate = checked_file(candidate.parent, candidate.name)
+        validate_native_gate(recovery_gate)
     files = compile_web(preview.prepare(version=version, resolution=resolution))
     info = json.loads(files['appinfo.json'])
     app_id = info['id']
@@ -109,9 +137,12 @@ def build(output, version='0.0.1', legacy_node_prototype=False, resolution=None,
     from scripts.theme_receiver import inject
     private_service = bundle_presentation_context({name[len(service_prefix):]: data for name, data in payload.items() if name.startswith(service_prefix)})
     private_service = bundle_c1_lease(private_service)
+    private_service = bundle_weather(private_service)
     private_service = inject(private_service, standalone=True)
     payload.pop(service_prefix+'c1-lease.js')
-    if legacy_node_prototype:
+    if legacy_node_beta:
+        private_service['service.js'] = b"require('./startup-diagnostics');\n" + private_service['service.js']
+    if legacy_node_prototype or legacy_node_beta:
         from scripts.root_node_build import compile_root_node
         private_service = compile_root_node(private_service)
     payload.update({service_prefix + name: data for name, data in private_service.items()})
@@ -140,11 +171,15 @@ def build(output, version='0.0.1', legacy_node_prototype=False, resolution=None,
         'inventory': 'empty; configure locally for the later hardware test',
         'files': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(payload.items())},
     }
+    if legacy_node_beta:
+        release['runtime_variant'] = 'node012-beta'
+        release['automatic_updates'] = False
     if native_gate is not None:
         release.update(home_backend='c1-native-gate', experimental=True,
                        native_sha256=hashlib.sha256(native_gate).hexdigest())
         if keyfilter:
             release['routing'] = 'compositor-keyfilter-v1'
+            release['compositor_admission'] = 3
             release['capabilities'].append('c1-keyfilter-v1')
     from deploy import SUPPORT_FILES, RUNTIME_FILES, checked_file
     source = Path(__file__).resolve().parent
@@ -157,7 +192,14 @@ def build(output, version='0.0.1', legacy_node_prototype=False, resolution=None,
         if keyfilter:
             for extra in ('c1_keyfilter.py', 'c1-home-filter.js'):
                 support['runtime/' + extra] = checked_file(source, 'runtime/' + extra)
-    if legacy_node_prototype:
+    if recovery_gate is not None:
+        # Current trusted recovery for retained schema-1 installations only.
+        # deploy.install still copies only the explicitly selected compositor.
+        support['runtime/c1-home-gate'] = recovery_gate
+    if legacy_node_beta:
+        from scripts.root_node_build import compile_root_beta
+        support = compile_root_beta(support)
+    elif legacy_node_prototype:
         support = compile_root_node(support)
     output.mkdir(parents=False, exist_ok=False)
     (output / name).write_bytes(package)
@@ -182,15 +224,18 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='New directory; parent must exist')
     parser.add_argument('--version', default='0.0.1', help='Root release version, X.Y.Z')
     parser.add_argument('--legacy-node-prototype', action='store_true', help='Host-only Node 0.12 prototype; admission remains Node 8+')
+    parser.add_argument('--legacy-node-beta', action='store_true', help='Explicit Node 0.12.2 Beta payload with ordinary OTA disabled')
     parser.add_argument('--resolution', choices=('1280x720', '1920x1080'), help='Explicit graphics resolution for this candidate package')
     parser.add_argument('--experimental-c1-gate', type=Path, metavar='ARM_BINARY',
                         help='Explicit developer-only C1 backend; excluded from normal installer and OTA')
     parser.add_argument('--experimental-c1-keyfilter', type=Path, metavar='ARM_BINARY',
                         help='Explicit mount-free C1 compositor routing guardian')
+    parser.add_argument('--c1-mount-recovery', type=Path, metavar='ARM_BINARY',
+                        help='Installer-only recovery for retained schema-1 native Home')
     args = parser.parse_args()
     try:
-        package = build(args.output, version=args.version, legacy_node_prototype=args.legacy_node_prototype,
-                        resolution=args.resolution, experimental_c1_gate=args.experimental_c1_gate, experimental_c1_keyfilter=args.experimental_c1_keyfilter)
+        package = build(args.output, version=args.version, legacy_node_prototype=args.legacy_node_prototype, legacy_node_beta=args.legacy_node_beta,
+                        resolution=args.resolution, experimental_c1_gate=args.experimental_c1_gate, experimental_c1_keyfilter=args.experimental_c1_keyfilter, c1_mount_recovery=args.c1_mount_recovery)
     except (ValueError, OSError) as exc:
         parser.exit(1, 'Candidate build failed: ' + str(exc) + '\n')
     print('Built ' + str(package) + '. Offline only; hardware validation pending.')

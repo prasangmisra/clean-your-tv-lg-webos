@@ -1,5 +1,23 @@
 # Install cytv without a terminal
 
+<a id="installer-update-check-unreleased"></a>
+
+## Installer update check
+
+Before a new installation, the computer installer checks GitHub's latest stable
+release and compares its installer version from `BUILD-INFO.json` with the running
+installer. If newer, choose **Open GitHub and download the latest version** to open
+the release page and stop this installation, or **No, install this version** to
+explicitly continue with the embedded packages. It never replaces itself or
+silently switches packages. The terminal also prints the download link.
+
+Network, rate-limit, TLS or invalid-metadata errors show an unavailable-check
+notice and allow installation to continue. Requests use HTTPS with a three-second
+timeout per request; no TV data or credentials are sent. Pending operations and
+maintenance/recovery commands skip this check. Non-interactive installation stops
+when a newer installer is found unless `--use-bundled-version` is explicitly given;
+`--yes` alone does not authorize using an older installer.
+
 > **Release 1.9.0:** see [versions, tested scope and recovery limits](RELEASE-1.9.0.md). C1 Beta is fresh-install only, selected automatically in the common installer; normal OTA is unavailable and physical C1 acceptance is pending. Historical results below retain their original artifact scope.
 
 > Release 1.7.1 rebuilds cytv 0.8.1 to correct macOS bundled-package validation. Use the published release link below for available downloads. [Patch scope and checks](RELEASE-1.7.1.md).
@@ -54,6 +72,19 @@ before package installation. Keep its diagnostic report; do not edit the app bun
 substitute IPKs or bypass checks. This fix does not require a TV firmware update.
 
 ### If the app opens but cannot connect to the TV
+
+**Published v1.12.1:** Connection failures distinguish denied network
+access, refused SSH ports and timeouts when the operating system provides that
+cause. The failure screen shows guidance and **Check connection again** as the
+primary action. This runs Doctor, not installation. **Change connection** checks
+an edited address, edition and port without starting setup. On macOS, **Open
+System Settings** opens Settings; follow the displayed Privacy & Security →
+Local Network path. macOS may list an older duplicate app name. The app cannot
+infer the permission switch state from an unreachable/timeout error. Connection
+editing/recheck shortcuts are withheld while an operation needs recovery;
+follow the existing recovery flow. Saving diagnostics and reporting an issue
+remain optional secondary actions.
+
 
 1. Turn on the TV and connect it and your Mac to the same home network.
 2. Open **System Settings → Privacy & Security → Local Network** and enable **cytv**
@@ -154,7 +185,7 @@ default. Recovery never starts a new installation automatically. **Set up my TV*
 also enters recovery when it finds a retained operation. Returning to LG Home
 alone does not complete removal. Unknown package/setup outcomes keep their data.
 
-For the next candidate, **Uninstall Clean Your TV** uses a simple removal flow:
+In published v1.11.0 and later, **Uninstall Clean Your TV** uses a simple removal flow:
 confirm once, stop/remove known present project items, fully restart the TV when
 asked, then choose **Try again** for the final sweep. Disconnect and reconnect
 power; standby and Quick Start are not enough. CYTV never restarts the TV
@@ -164,7 +195,7 @@ recovery wizard. An actual access denial asks for Root; an actual busy operation
 asks you to wait and try again. Completion needs both removed and verified-clean
 proof. Eligible Root setup may still finish separately with LG Home/Home control
 off. Physical checks remain separate. See the
-[candidate removal flow](RECOVERY.md#next-candidate-original-operation-recovery-and-full-removal).
+[removal flow](RECOVERY.md#next-candidate-original-operation-recovery-and-full-removal).
 
 For unfinished removal, **Try again** is the primary action and repeats the same
 approved goal. **Save diagnostic report…** remains available. For other failed
@@ -191,7 +222,7 @@ submitted twice automatically.
 
 Root recovery records, archived updater state and referenced managed Python
 runtime slots remain for diagnostics and recovery.
-That is the published retention baseline. The next candidate additionally removes
+The published v1.11.0 cleanup additionally removes
 owned private setup/runtime data when its cleanup proof permits; minimal removal
 records and ownership backups may remain. A blocked cleanup is reported explicitly.
 They have no active service or startup registration. The Mac application and its

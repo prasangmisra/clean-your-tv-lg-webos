@@ -19,14 +19,24 @@ class Remote:
 
     def run(self, command, data=None, timeout=30):
         self.calls.append(('run', command))
+        if data and b'CYTV_SELECTED_RUNTIME_VERIFIED' in data:
+            return 'CYTV_SELECTED_RUNTIME_VERIFIED'
+        if 'CYTV_SYSTEM_PYTHON' in command and 'CYTV_ROOT_READY' not in command:
+            return 'CYTV_SYSTEM_PYTHON'
+        if 'CYTV_NODE_VERSION' in command and '/usr/bin/node --version' in command:
+            return 'CYTV_NODE_VERSION v8.12.0'
         from cytv import no_root_observer
         if '/usr/bin/node -e ' in command:
             args=shlex.split(command)
             code=args[args.index('-e')+1]
-            if code==no_root_observer.PROGRAM:
+            if no_root_observer.STORAGE_SELECT in code:
+                request=json.loads(args[-1])
+                return json.dumps({'operation':request['plan']['operation'],'root':request['root']})
+            if no_root_observer.PROGRAM in code:
                 import hashlib
                 request=json.loads(args[-1]);plan=request['plan'];action=request['command'];index=request.get('slot')
                 operation=plan['operation']
+                if action=='storage-check':return json.dumps({'operation':operation})
                 if action=='prepare':
                     self.observers.setdefault(operation,{'protocol':no_root_observer.PROTOCOL,'operation':operation,'plan_sha256':hashlib.sha256(no_root_observer.canonical(plan).encode()).hexdigest(),
                          'reservation':'active','closed':None,'configuration':{step:'prepared' for step in (('files','eim','launch') if plan['action']=='install' else ('restore',))},
@@ -310,21 +320,20 @@ class OperationTests(unittest.TestCase):
                 retained = {p.name: p.read_bytes() for p in directory.iterdir()}
                 remote.calls.clear()
                 events = []
-                with self.assertRaises(operations.UserError) as failure:
-                    recover(installer, lambda _: 'y', DesktopConsole(lambda k,v: events.append((k,v))))
-                report = diagnostics.create_report(self.store, 'recover', installer.profile, 'recover', failure.exception)
+                recover(installer, lambda question: 'n' if 'Remove remaining' in question else 'y',
+                        DesktopConsole(lambda k,v: events.append((k,v))))
+                report = diagnostics.create_report(self.store, 'recover', installer.profile, 'recover')
                 current = json.loads(report.read_text())
-                self.assertEqual(failure.exception.reason_code, 'pending-operation')
                 self.assertEqual(current['first_failure'], first_report['first_failure'])
                 self.assertEqual(receipt.read_bytes(), before)
                 self.assertEqual({p.name:p.read_bytes() for p in directory.iterdir()}, retained)
                 self.assertFalse(any(c[0]=='upload' for c in remote.calls))
                 self.assertEqual([c[1] for c in remote.calls if c[0]=='luna'],
                     [])
-                self.assertTrue(any(k=='recovery-plan' and v['state']=='blocked' for k,v in events))
+                self.assertTrue(any(k=='recovery-plan' and v['state']=='ready' for k,v in events))
                 self.assertNotIn('PRIVATE', report.read_text())
-                self.assertNotIn('PRIVATE', str(failure.exception))
-                self.assertNotIn('cytv doctor', str(failure.exception))
+                self.assertNotIn('PRIVATE', str(events))
+                self.assertNotIn('cytv doctor', str(events))
 
     def test_unstarted_no_root_removal_does_not_require_denied_monitor(self):
         from cytv.errors import TVRejected
@@ -839,6 +848,8 @@ class OperationTests(unittest.TestCase):
                 self.assertEqual(receipt.read_bytes(), record)
                 self.assertTrue(all(call[0] == 'luna' and call[1].endswith('/dev/listApps')
                                     or call[0] == 'run' and 'CYTV_HELPER_' in call[1]
+                                    or call[0] == 'run' and 'CYTV_NODE_VERSION' in call[1]
+                                       and '/usr/bin/node --version' in call[1]
                                     for call in remote.calls))
                 receipt.unlink()
 
@@ -947,9 +958,9 @@ class OperationTests(unittest.TestCase):
         info = json.loads(files[appinfo]); info['resolution'] = '1280x720'
         files[appinfo] = json.dumps(info).encode()
         (target/name).write_bytes(package.ipk(package.ROOT_APP, '0.0.1', files))
-        manifest['files'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in target.iterdir() if p.name != 'bundle.json'}
+        manifest['files'] = {p.relative_to(target).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in target.rglob('*') if p.is_file() and p.name != 'bundle.json'}
         (target/'bundle.json').write_text(json.dumps(manifest))
-        self.manifest['files'].update({p.relative_to(self.payload).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in target.iterdir()})
+        self.manifest['files'].update({p.relative_to(self.payload).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in target.rglob('*') if p.is_file()})
         remote = Remote()
         original = remote.luna
         probes = []
@@ -1192,9 +1203,15 @@ class OperationTests(unittest.TestCase):
             'usr/palm/applications/' + package.ROOT_APP + '/appinfo.json': json.dumps({'id': package.ROOT_APP, 'version': '0.0.1', 'resolution': '1920x1080'}).encode()}))
         (root / 'release.json').write_text(json.dumps({'application_id': package.ROOT_APP, 'version': '0.0.1', 'files': {}}))
         (root / 'deploy.py').write_bytes(b'original device driver')
+        source = Path(__file__).resolve().parents[2] / 'root-edition'
+        for support_name in ('python_binding.py', 'runtime/cli.py', 'runtime/device_adapter.py',
+                     'runtime/persistent_health.py', 'runtime/emergency_trial.py'):
+            path = root / support_name
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes((source / support_name).read_bytes())
         (root / 'SHA256SUMS').write_text('old')
-        (root / 'bundle.json').write_text(json.dumps({'package': name, 'files': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()}}))
-        self.manifest['files'].update({p.relative_to(self.payload).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()})
+        (root / 'bundle.json').write_text(json.dumps({'package': name, 'files': {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()}}))
+        self.manifest['files'].update({p.relative_to(self.payload).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()})
         return root
 
     def test_root_installs_updater_with_same_baseline_before_activation(self):
@@ -1285,16 +1302,6 @@ class OperationTests(unittest.TestCase):
             installer.install(self.inventory)
         self.assertIsNone(self.store.pending(installer.profile))
         self.assertFalse(any(c[0] == 'upload' for c in remote.calls))
-
-    def test_existing_updater_blocks_reinstall_before_removing_root(self):
-        self.root_bundle()
-        remote = Remote()
-        run = remote.run
-        remote.run = lambda command, **kwargs: 'CYTV_EXISTING_UPDATER' if 'CYTV_EXISTING_UPDATER' in command else run(command, **kwargs)
-        installer = self.installer(remote, 'root')
-        with self.assertRaisesRegex(RuntimeError, 'Updater'):
-            installer.install(self.inventory, reinstall='installed')
-        self.assertFalse(any(c[0] == 'upload' or ' uninstall' in c[1] for c in remote.calls))
 
     def test_root_installs_then_enables_and_launches(self):
         self.root_bundle()
@@ -1491,7 +1498,9 @@ class OperationTests(unittest.TestCase):
         remote.run=run;checkpoint=len(remote.calls)
         answers=iter(('y',''))
         recover(installer,lambda _:next(answers),Console(lambda *_:None))
-        self.assertEqual(self.store.pending(installer.profile),previous)
+        self.assertEqual(self.store.pending(installer.profile),dict(previous,
+            activation_restore_pending=False,activation_restore='verified'))
+        previous=self.store.pending(installer.profile)
         self.assertFalse(any(c[0]=='run' and c[1].endswith(' enable') for c in remote.calls[checkpoint:]))
         answers=iter(('y','1','y','3'))
         recover(installer,lambda _:next(answers),Console(lambda *_:None))
@@ -1528,34 +1537,6 @@ class OperationTests(unittest.TestCase):
         self.assertFalse(any('uninstall' in call[1] or call[0]=='upload' for call in remote.calls))
         self.assertIsNone(self.store.pending(installer.profile))
 
-    def test_root_reinstall_removes_archives_then_installs_exactly_once(self):
-        self.root_bundle()
-        remote = Remote()
-        original = remote.run
-        actions=[]
-        def run(command, **kwargs):
-            if 'CYTV_PYTHON_BOUND' in command:return ''
-            args = shlex.split(command)
-            if args[:1] == ['env'] and args[1].startswith('CYTV_ROOT_INSTALL_ATTEMPT='):
-                self.assertRegex(args[1], r'^CYTV_ROOT_INSTALL_ATTEMPT=[a-f0-9]{32}$')
-                args = args[2:]
-            if len(args)>3 and args[:2] == ['/usr/bin/python3','-c'] and 'CYTV_UPDATER_VERIFIED' not in command:
-                action=args[3]
-                actions.append(action)
-                if action=='inspect': return json.dumps({'identity':{'device':1,'inode':2,'journal':'a'*64},'busy':False})
-                if action=='archive': return json.dumps({'archived':args[4]})
-                self.fail('Unexpected archive action '+action)
-            if len(args)>2 and args[1].endswith('/deploy.py'):
-                actions.append(args[2])
-                if args[2]=='uninstall': return json.dumps({'returnValue':True,'removed':package.ROOT_APP,'state_retained':operations.ROOT_STATE})
-            return original(command, **kwargs)
-        remote.run=run
-        installer=self.installer(remote, 'root')
-        result=installer.install(self.inventory, reinstall='installed')
-        self.assertEqual(result['installed'], package.ROOT_APP)
-        self.assertEqual(actions, ['uninstall','inspect','archive','status','status','enable','status'])
-        self.assertIsNone(self.store.pending(installer.profile))
-
     def test_no_root_accepts_arm32_userspace_on_aarch64_kernel(self):
         remote = Remote()
         original = remote.run
@@ -1563,6 +1544,7 @@ class OperationTests(unittest.TestCase):
         installer = self.installer(remote)
         installer.preflight(install=True)
         self.assertEqual(installer.tv_info, {
+            'node_version': '8.12.0', 'node_version_status': 'read',
             'kernel_arch': 'aarch64', 'userland_abi': 'arm32', 'arm32_supported': True,
             'helper_state': 'stopped'})
         self.assertFalse(any(c[0] == 'upload' for c in remote.calls))

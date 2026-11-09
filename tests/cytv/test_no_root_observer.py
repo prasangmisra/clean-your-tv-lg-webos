@@ -91,6 +91,33 @@ sys.stdin.read()
 
 @unittest.skipIf(os.name=='nt','The TV observer uses POSIX process and filesystem primitives')
 class ObserverProcesses(unittest.TestCase):
+    def test_sdk_staging_permissions_with_private_sticky_storage(self):
+        with tempfile.TemporaryDirectory(dir=PROCESS_TMP) as root:
+            h=Harness(root)
+            developer=h.root/'developer';developer.mkdir(mode=0o775);developer.chmod(0o775)
+            public=developer/'temp';public.mkdir(mode=0o777);public.chmod(0o777)
+            # Model the fixed root-owned SDK containers; real Node still runs
+            # as this unprivileged host user and performs every storage operation.
+            prefix="var fs=require('fs'),original=fs.lstatSync;fs.lstatSync=function(p){var s=original(p);if(p===DEV||p===PUB)s.uid=0;return s;};".replace('DEV',json.dumps(str(developer))).replace('PUB',json.dumps(str(public)))
+            h.source=prefix+observer.PROGRAM.replace("'/media/developer'",json.dumps(str(developer)))
+            h.config['public_root']=str(public)
+            h.plan=observer.make_plan('a'*32,'b'*32,'install',{'helper.ipk':b'helper','launcher.ipk':b'home'},dict(zip(observer.APPS,['1','2'])),public_root=str(public))
+            h.plan['source_sha256']=hashlib.sha256(h.source.encode()).hexdigest()
+            runtimes=[shutil.which('node')]+[os.environ[name] for name in ('NODE010','NODE01025','NODE012') if os.environ.get(name)]
+            for runtime in runtimes:
+                with self.subTest(runtime=runtime):
+                    h.runtime=runtime
+                    for mode in (0o775,0o777):
+                        developer.chmod(mode)
+                        h.call('storage-check')
+            self.assertEqual(list(public.iterdir()),[])
+            self.assertFalse((h.root/'requests').exists())
+            h.call('prepare')
+            self.assertEqual(h.call('status')['reservation'],'active')
+            self.assertEqual((h.root/'private').stat().st_mode&0o777,0o700)
+            public.chmod(0o775)  # Only the exact known SDK layout is admitted.
+            h.call('storage-check',ok=False)
+
     def test_pinned_stream_uploads_on_every_configured_runtime(self):
         runtimes=[shutil.which('node')]+[os.environ[name] for name in ('NODE010','NODE01025','NODE012') if os.environ.get(name)]
         for runtime in runtimes:
@@ -142,6 +169,39 @@ fs.writeSync=function(fd,b){if(Buffer.isBuffer(b)&&b.toString().indexOf('private
                         self.assertEqual(result.returncode,0,result.stderr.decode())
                         self.assertEqual((state/'ssap-key.json').read_bytes(),b'private-original')
                         self.assertEqual((state/'ssap-key.json').stat().st_mode&0o777,0o640)
+
+    def test_key_mode_repair_only_restricts_a_checked_owned_single_link_inode(self):
+        runtimes=[shutil.which('node')]+[os.environ[name] for name in ('NODE010','NODE01025','NODE012') if os.environ.get(name)]
+        for runtime in runtimes:
+            with self.subTest(runtime=runtime),tempfile.TemporaryDirectory(dir=PROCESS_TMP) as root:
+                state=Path(root).resolve()/'state';state.mkdir(mode=0o775)
+                key=state/'ssap-key.json';key.write_bytes(b'retained-key');key.chmod(0o775)
+                apps=state/'apps.json';apps.write_bytes(b'[]');apps.chmod(0o775)
+                latch=state/'blocked';latch.write_bytes(b'keep-stop');latch.chmod(0o775)
+                before=key.stat()
+                def run(repair=False):
+                    args=['repair-key-mode'] if repair else []
+                    return subprocess.run([runtime,'-e',observer.STATE_CHECK]+args+[str(state)],capture_output=True,timeout=5)
+                self.assertNotEqual(run().returncode,0,'Read-only status must not silently repair permissions')
+                result=run(True)
+                self.assertEqual(result.returncode,0,result.stderr.decode())
+                after=key.stat()
+                self.assertEqual(after.st_mode&0o777,0o640)
+                self.assertEqual((after.st_ino,after.st_uid,after.st_gid),(before.st_ino,before.st_uid,before.st_gid))
+                self.assertEqual(key.read_bytes(),b'retained-key')
+                self.assertEqual(latch.read_bytes(),b'keep-stop')
+                self.assertEqual(latch.stat().st_mode&0o777,0o775)
+                for kind in ('world-write','hardlink','symlink','unsafe-apps'):
+                    with self.subTest(kind=kind):
+                        key.unlink();key.write_bytes(b'retained-key');key.chmod(0o775)
+                        other=state/'other';other.unlink(missing_ok=True)
+                        if kind=='world-write':key.chmod(0o777)
+                        if kind=='hardlink':os.link(key,other)
+                        if kind=='symlink':key.rename(other);key.symlink_to(other)
+                        if kind=='unsafe-apps':apps.chmod(0o777)
+                        self.assertNotEqual(run(True).returncode,0)
+                        self.assertEqual(key.stat().st_mode&0o777,0o777 if kind=='world-write' else 0o775)
+                        self.assertEqual(key.read_bytes(),b'retained-key')
 
     def test_target_readback_scripts_run_on_every_configured_runtime(self):
         runtimes=[shutil.which('node')]+[os.environ[name] for name in ('NODE010','NODE01025','NODE012') if os.environ.get(name)]
@@ -218,7 +278,13 @@ fs.writeSync=function(fd,b){if(Buffer.isBuffer(b)&&b.toString().indexOf('private
             h.sender.write_text('#!/usr/bin/env python3\nimport os,signal,time\nfrom pathlib import Path\n'
                 'signal.signal(signal.SIGTERM,lambda *_:None)\nPath('+repr(str(h.root/'sender-pid'))+').write_text(str(os.getpid()))\n'
                 'print(\'{"details":{"state":"installed"}}\',flush=True)\nwhile True:time.sleep(.05)\n')
-            h.call('start',0);self.assertEqual(h.wait()['terminal'],'success')
+            h.call('start',0)
+            # The sender starts only after the permanent claim is fully written
+            # and synced. Do not poll strict evidence reads during its creation.
+            sender_pid=h.root/'sender-pid';deadline=time.monotonic()+5
+            while not sender_pid.exists() and time.monotonic()<deadline:time.sleep(.01)
+            self.assertTrue(sender_pid.exists(),'sender did not start after claim persistence')
+            self.assertEqual(h.wait()['terminal'],'success')
             pid=int((h.root/'sender-pid').read_text());alive=True;deadline=time.monotonic()+2.5
             try:
                 while time.monotonic()<deadline:

@@ -1,5 +1,12 @@
 # Recover TV controls or an interrupted installation
 
+> **Experimental compositor routing (#364):** experimental compositor recovery stops routing
+> before removing only its own filter. Safety/power stops require explicit
+> re-enable. If Home identity changed, the owned filter can be released after
+> retirement, but full stock proof remains unverified and recovery evidence is
+> retained. Do not delete journals or remove another launcher's state. See
+> [capability-based admission](development/C1-NATIVE-GATE.md#unpublished-capability-based-compositor-admission-364).
+
 > **Release 1.9.0:** see [versions, tested scope and recovery limits](RELEASE-1.9.0.md). C1 Beta is fresh-install only, selected automatically in the common installer; normal OTA is unavailable and physical C1 acceptance is pending. Historical results below retain their original artifact scope.
 
 ## Return to LG Home
@@ -12,6 +19,11 @@ The emergency stop persists across startup. To resume No-root, open **Home Helpe
 choose **Start Helper** and confirm. To resume Root, turn **Change Home** on in
 Home settings. Opening Home alone does not restart a stopped Helper.
 **Open LG Home** only visits LG Home once; it keeps the saved Home choice.
+
+Updating packages does not restart a stopped No-root Helper. After updating to
+a release containing a fix for the fault, use **Start Helper** above to resume
+Home control explicitly. Do not delete `blocked`/`stopped` markers manually or
+expect an update to clear an emergency stop.
 
 If controls fail again, leave LG Home active and save diagnostics. Do not repeatedly
 clear stop flags after a fault. A Quick Access assignment to Home offers another
@@ -28,12 +40,63 @@ minutes. Stop and triple Home remain persistent stops and require explicit
 stopped. Physical No-root acceptance remains unverified for the exact Helper transition; see
 [recovery behavior and limits](HELPER-DIAGNOSTICS.md#watchdog-recovery-unpublished-candidate-155).
 
+<a id="ssh-identity-changed"></a>
+
+## SSH identity changed after a reset or SSH change
+
+If a report shows `ssh-identity-changed` / `BadHostKeyException` at
+`ssh-connect`, the presented SSH host key differs from the saved trusted key.
+CYTV stopped before authentication and before inspecting or continuing recovery
+on the TV. This differs from first-use **Connect and remember this TV?**:
+that prompt cannot approve replacement of an existing pin. A factory reset or
+reroot may explain a new key, but does not verify the TV's identity.
+
+Keep the original saved connection/profile, SSH keys, trust records, diagnostic
+reports and pending-operation receipts privately. A retained
+`uninstall / coordinator-submitted` describes earlier work; it is not the cause
+of the host-key mismatch or proof of what removal completed. Do not clear
+`known_hosts`, delete/recreate the profile or pending records, disable host-key
+checks, or repeat removal, installation, reset or rooting to bypass this stop.
+
+Before maintainer-assisted trust recovery, the owner must independently establish
+that the endpoint is the intended TV and verify its current host-key fingerprint
+through an already trusted access path or a trusted local/on-device method.
+Record which independent method was used, the verified fingerprint and the
+owner-confirmed reset/SSH-change history for private maintainer review. A key
+presented by the blocked network connection, an address or a reset history alone
+is insufficient. Do not upload keys, profiles or raw diagnostics publicly.
+
+CYTV currently supplies no supported automatic host-key replacement or re-trust
+command. Even after independent identity verification, maintainers still need a
+reviewed, profile-preserving trust-recovery procedure before recovery can resume.
+Keep the pending operation intact until that procedure and the subsequent trusted
+inspection establish the allowed next action.
+
 ## Interrupted setup or removal
 
-### Next candidate: original-operation recovery and full removal
+<a id="unreleased-local-recovery-storage-messages"></a>
 
-These are next-candidate instructions; the download buttons still provide the
-published release. For removal, select **Uninstall Clean Your TV** on desktop or
+### Local recovery storage messages
+
+These messages are included from published v1.12.1 onward; v1.12.0 did not include them.
+
+A local recovery storage refusal concerns the computer or Android app storage,
+not a TV package-status reply. It can mean that a directory's ownership or
+permissions did not pass verification, before the recovery file was read. It does
+not by itself mean that saved data disappeared. Keep the original files and
+permissions unchanged and save a diagnostic report for review; do not publish
+private paths, profiles or recovery capsules. New reports distinguish these
+categories without exposing paths or account names; see
+[local diagnostic fields and limits](development/INSTALLER-DIAGNOSTICS.md#local-recovery-storage-next-candidate-201).
+An older incompatible observer still uses separately confirmed removal through
+the existing recovery journey. A clearer message does not permit replay or prove
+the original package outcome.
+
+<a id="next-candidate-original-operation-recovery-and-full-removal"></a>
+
+### Original-operation recovery and full removal (published v1.11.0)
+
+These instructions apply to published v1.11.0 and later. For removal, select **Uninstall Clean Your TV** on desktop or
 Android (`cytv uninstall`) using the saved TV connection. Confirm the removal
 once. A failed or partial installation does not need to complete first: remove
 known project apps/files that are present and skip items that are absent.
@@ -55,6 +118,18 @@ A failed check stays visible; it is never converted to green completion. Keep
 keys and original reports, and do not reinstall or clear Android app data to
 retry removal. Missing files are skipped; absence is not itself an error.
 
+In v1.11.0 and later, failed or interrupted setup offers recovery directly. If No-root setup cannot continue, confirm full removal once. Removal automatically retries transient connection loss and a busy CYTV worker up to three attempts. If Root access is required, choose **Connect using Root** for the same TV; verified Root cleanup also finishes its blocked No-root removal. A failed Root activation attempts to restore and verify LG Home without repeating activation. Cancellation with unfinished work keeps a diagnostic report and recovery actions. Emergency-stop state remains unchanged.
+
+**v1.13.0:** verified full removal leaves the TV ready for a new Root or No-root installation. Minimal inactive removal receipts prevent old work from resuming; do not delete them manually. Finish recovery first if removal or its current checks are incomplete.
+
+**Next installer update (not yet published):** on older TVs without a separate
+LG Home app, No-root removal can use a freshly verified LG stock screen and may
+switch to Live TV. Keep the TV on and follow any restart request. Continue with
+**Try again** using the original saved connection; do not delete journals, clear
+Android app data or reset the TV. The updated Root remover also verifies a
+matching completed cleanup when the local recovery record still shows pending;
+matching history alone does not establish current absence.
+
 Returning to LG Home alone remains separate from removal. Emergency controls
 above stay available. For setup recovery, eligible Root can still finish with
 LG Home and Home control off; that goal does not require activating Clean Home.
@@ -64,7 +139,7 @@ not establish compatibility or successful recovery on a reporter's TV. See the
 [maintained failure-injection matrix](development/INSTALLER-RECOVERY-MATRIX.md).
 
 The version-specific recovery sections below describe their published scope.
-The candidate Remove action is available even when earlier setup is incomplete.
+The Remove action is available even when earlier setup is incomplete.
 
 <a id="interrupted-setup-or-removal-in-110"></a>
 <a id="interrupted-no-root-installation-in-the-unpublished-140-candidate"></a>
@@ -106,6 +181,15 @@ files and verified Root Updater recovery. A linked product installation must als
 be complete and current. Unknown, busy or conflicting evidence keeps setup blocked.
 The original activation receipt is archived locally before the explicit attempt;
 packages are not reinstalled and no recovery journal or failsafe flag is deleted.
+
+For an explicit replacement after a failed profile-based Root activation, choose
+**Set up my TV** with the original saved connection, then **Reinstall Root**.
+The installer validates its new bundle, performs verified full removal and then
+installs its own runtime and activates Root. This is a new, confirmed installation;
+recovery inspection does not automatically replace packages. If cleanup needs a
+restart or cannot be verified, replacement stops and the saved removal remains
+available. Preferences are removed, so back them up first. See
+[Root reinstallation](MAINTENANCE.md#root-reinstallation-through-the-installer-unreleased-355).
 C1 Beta recovery is unchanged. This retry path does not update the retained TV runtime.
 
 This improves recovery and diagnosis; it does not establish the original cause or
@@ -114,10 +198,12 @@ The updated Root runtime records a fixed health-context refusal before superviso
 recovery. Existing runtime logs cannot be upgraded retroactively: retain the
 original evidence and do not edit installed runtime files or integrity receipts.
 
-#### Candidate: finish verified Root setup with Home control off
+<a id="candidate-finish-verified-root-setup-with-home-control-off"></a>
+
+#### Finish verified Root setup with Home control off
 
 If activation keeps failing on the retained runtime, do not repeatedly select
-**Finish Root setup?**. The next installer offers a separate default-No choice,
+**Finish Root setup?**. The installer offers a separate default-No choice,
 **Finish setup with LG Home and Home control off**, directly in the recovery menu,
 followed by **Finish Root setup with Home control off?** (default No).
 It is offered only for eligible pending profile-backend setup that passes the same
@@ -137,10 +223,9 @@ do not repeat bootstrap over it. Open Home Root manually, then **Settings →
 Software updates → Update all** for a verified signed complete set. Preparation
 and update still enforce their original compatibility, transaction, baseline and
 rollback checks; stop on refusal and retain evidence. A launcher-only IPK cannot
-update the private runtime. This candidate flow is not yet published or physically
-accepted on the reporting TV. [Update requirements](UPDATES.md).
+update the private runtime. This flow is published, but physical recovery on the reporting TV remains unconfirmed. [Update requirements](UPDATES.md).
 
-Candidate reports include a passive retained-runtime snapshot: project component
+Current reports include a passive retained-runtime snapshot: project component
 versions, runtime release metadata and fixed health-refusal categories. A legacy
 `generic` refusal has no predicate detail. `historical-tail` is historical evidence;
 `since-enable` bounds newly appended records around the host enable command but
@@ -315,8 +400,8 @@ transaction or backup also blocks replacement, even if marked complete; preserve
 it for review rather than deleting it to force replacement. It does not patch
 retained pinned code in place or replay an uncertain remove/install request.
 
-The 1.9.0 installer targets System Updater 1.2.2. A completed earlier
-replacement to 1.1.1 can start a new 1.2.2 operation only
+Published v1.13.0 includes fresh System Updater 1.2.7; v1.12.1 included 1.2.6. Only installed 1.1.0/1.1.1 sources are admitted by the explicit replacement. Retained 1.1.2 and 1.2.x have no general replacement path. A completed earlier
+replacement to 1.1.1 can start a new target operation only
 after the installer authenticates its saved bundle, baseline, original archive,
 terminal removal and current owner, and confirms that later recovery has finished.
 The original completed journal is durably archived with its existing evidence;

@@ -80,6 +80,10 @@
       if (root.HomeWallpaperPanel)
         HomeWallpaperPanel.activate(groups[index].id === 'wallpapers');
     }
+    var weatherReady = root.HomeWeather
+      ? root.HomeWeather.mountSettings(panel, card, groups)
+      : null;
+    if (root.HomeName) root.HomeName.mountSettings(groups);
     groups.forEach(function (group, i) {
       var tab = document.createElement('button'),
         pane = document.createElement('section'),
@@ -155,6 +159,7 @@
         el.style.display = 'none';
     });
     select(0);
+    if (weatherReady) weatherReady();
     var view = {
       panel: panel,
       card: card,
@@ -187,6 +192,14 @@
           }
           return false;
         }
+        if (
+          !inNav &&
+          active &&
+          active.tagName === 'INPUT' &&
+          active.type === 'text' &&
+          [13, 37, 39].indexOf(key) >= 0
+        )
+          return false;
         var languageChoices = document.getElementById(
           'settingsLanguageChoices'
         );

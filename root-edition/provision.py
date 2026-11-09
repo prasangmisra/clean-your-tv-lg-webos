@@ -13,6 +13,7 @@ import subprocess
 from python_binding import verify_binding
 
 NAME = 'com.cleanyourtv.root.preview.service'
+LEGACY_NODE_BETA = False
 LEASE_NAME = 'com.webos.cleanyourtv.root.lease'
 SERVICE = Path('/media/developer/apps/usr/palm/services') / NAME
 STATE = Path('/var/lib/clean-your-tv-root')
@@ -73,7 +74,7 @@ def runner_bytes():
     return ('#!/bin/sh\nset -eu\n[ "$#" -eq 0 ] || exit 2\n'
             'cd '+str(PRIVATE_SERVICE)+'\n'
             'export NODE_PATH=/usr/palm/frameworks:/usr/lib/nodejs:/usr/lib/node_modules\n'
-            'exec /usr/bin/node --require '+str(PRIVATE_SERVICE/'startup-diagnostics.js')+' /usr/palm/services/jsservicelauncher/bootstrap-node.js -- '
+            'exec /usr/bin/node '+('' if LEGACY_NODE_BETA else '--require '+str(PRIVATE_SERVICE/'startup-diagnostics.js')+' ')+'/usr/palm/services/jsservicelauncher/bootstrap-node.js -- '
             +str(STATE/'bootstrap.pid')+' /var/palm/ls2-dev '+str(PRIVATE_SERVICE)+'\n').encode()
 
 def prepare_private_service():
@@ -376,7 +377,7 @@ def prepare_stock_home():
     # Even a dangling marker is ambiguous. Never alter established recovery or
     # an existing routing transaction to retrofit support onto retained code.
     blocked = [STATE/name for name in ('recovery-provision.json','profile-trial.json',
-               'persistent-intent.json','persistent-binding.json','profile-candidate.stage')]
+               'persistent-intent.json','persistent-binding.json','boot-continuation.json','profile-candidate.stage')]
     blocked.append(Path('/var/webos-profile/override/clean-your-tv-root.json'))
     if pending is None and any(os.path.lexists(path) for path in blocked):
         raise ValueError('Home initialization requires never-activated provisioning')

@@ -91,8 +91,18 @@ release PR ready. Release notes alone do not replace updated usage instructions.
   devices and prerequisites, and affected component documentation. Update commands,
   download links, versions, screenshots and recovery/rollback instructions where
   behavior changed. Remove obsolete instructions.
-- Review translated guides for the same changes. Update affected translations;
-  record any remaining gaps explicitly in the release PR.
+- Review translated guides for the same changes. Keep `docs/i18n/` limited to
+  practical installation, prerequisites, controls and recovery in each named language;
+  omit project release/component versions, release news, candidate banners, developer
+  details and QA/issue status. Preserve required OS/runtime prerequisites and old
+  anchors. Update affected translations and record remaining gaps in the release PR.
+- Before publication, inventory temporary `unpublished`, `unreleased`, `next candidate`
+  and equivalent translated notices in current guides and component documentation.
+  After verified publication, reconcile those notices in `main` and `release/next`,
+  including documentation-only corrections made directly to `main`. README version
+  checks cover only marked metadata blocks and do not complete this prose review.
+  Retain actual unpromoted features, experimental/hardware limits, historical records
+  and old anchor aliases; publication alone is not physical-device acceptance.
 - Check documented commands and links against the candidate's actual CLI and
   artifacts. Distinguish candidate-only instructions from the published stable
   release, and retain honest hardware-tested and untested limitations.
@@ -168,6 +178,44 @@ this rule was introduced.
    retain valid unchanged evidence. If a genuine new blocker appears, finish
    the remaining independent planned cases and update the failure inventory
    before the next fix batch and replacement candidate.
+
+### Verification ledger and repeat rules
+
+Maintain one current verification ledger for the release, shared across focused
+branches, integration, agents and the final candidate. Reuse the existing release
+acceptance record and linked dated observations; do not create parallel tracking
+systems or introduce a new tool for this ledger. For each planned check, record
+its scope, relevant source/test inputs or artifact hashes, environment/device/state
+preconditions, result and evidence link, and any remaining gap. Link private
+evidence through a redacted summary rather than publishing private diagnostics.
+
+Before starting a test, build, signing run, installation or rollback:
+
+1. Consult the ledger. State the missing evidence or exact changed input and the
+   release decision this operation will resolve. If neither exists, skip it.
+2. Reuse valid matching results. A different branch, merge commit, PR, agent,
+   candidate label or documentation location alone does not invalidate them.
+   Use authenticated matching test-unit receipts and release-input equivalence
+   where required; do not treat arbitrary old logs as trusted candidate evidence.
+3. After a code or fixture correction, run the affected checks and dependencies.
+   Broaden scope only for a concrete shared dependency, unexplained failure or
+   changed precondition. Do not restart a successful full suite to reproduce a
+   result for a new record.
+4. Finish all known fixes, reviews and pre-dispatch inputs before one full RC.
+   A replacement requires an actual changed release input or unresolved failed
+   build gate; batch the required changes before dispatching it.
+5. Group necessary device cases into one bounded pass. Repeat installation or
+   rollback only when the required artifact or relevant device/state preconditions
+   changed, or a specific scenario remains unverified. Record that reason before
+   the operation. Preliminary evidence may guide the work but cannot stand in for
+   required final-package acceptance; run only its remaining applicable cases.
+6. Classify infrastructure failures separately from product failures. Retry a
+   failed policy check, network request or runner job at the narrowest supported
+   scope. Do not rebuild, re-sign or reinstall already successful artifacts merely
+   because an unrelated gate was unavailable. Preserve all required trust checks.
+
+When reporting progress, name the completed scope and the concrete remaining
+gaps. Do not reopen completed cases or expand release scope merely to keep testing.
 
 ### Mandatory pre-dispatch check for the release coordinator
 
@@ -380,27 +428,69 @@ Before testing, run:
 python3 scripts/release-flow.py acceptance-report
 ```
 
-This conservatively recommends scenarios from changes since `main`; it is not an
-acceptance result or a replacement for reviewing dependencies. Only known visual
-assets select `ui-controls` alone. Behavioral frontend JS and unknown/shared paths
-select the full matrix. Service/input paths select controls, startup and recovery;
-installer/updater paths select update-recovery, including post-transition controls
-and audio. Add scenarios whenever the change affects their preconditions.
+The command conservatively recommends **areas to review**, not a mandatory list
+of physical tests. A behavioral JS or shared-file match can select every area;
+the coordinator must refine that output into cases using the actual diff,
+packaged contents and dependencies before scheduling device work.
 
-Record one row per scenario with build run/attempt, artifact SHA-256, model and
-firmware, initial state/upgrade source, expected/observed result, evidence link,
-and untested paths. `update-recovery` includes installation/update/retained rollback
-and controls/audio after the transition; `startup` distinguishes standby and cold
-boot; `controls` includes Home, Back, other controls and emergency off. Retain
-independent recovery and owner-presence requirements for physical changes.
+### Select cases by the failure they could detect
 
-Carry an observation only when all artifacts used by that scenario have identical
-hashes and its preconditions (firmware, prior state/version and upgrade path) match.
-The candidate input comparison is enough to keep the same selected installer
-bytes across evidence edits; source similarity across rebuilt packages alone is
-not enough. Do not repeat unchanged cases merely because the overall release
-number changed. Do not carry a different model's result or label an untested path
-passed. An unresolved failure remains a failure until investigated.
+For each proposed case, record: changed behavior/input, plausible failure,
+relevant entrypoints/dependencies, existing evidence, and the smallest check
+whose failure would change the release decision. Keep one short candidate table:
+
+| Case | Why this release can affect it | Minimum check / existing evidence | Disposition |
+| --- | --- | --- | --- |
+| Concrete behavior | Changed path plus dependent mechanism | Automated, artifact, emulator or physical check | Selected, already verified, not selected, deferred or blocked |
+
+- Select affected behavior and its immediate integration boundary. A status-panel
+  change can need transitional-status/Off checks and one reported standby case;
+  it does not automatically require AC cold boots, process suspension, failsafe
+  and whole-edition rollback. An icon-reader change needs bounded catalog/path
+  cases and icon presentation, not every input gesture.
+- Prefer host/browser checks for deterministic validation, warnings and recovery
+  text. Use an emulator for Android package/runtime/update-state checks. Reserve
+  physical work for behavior those environments cannot observe. Do not reset,
+  reinstall, delete state or repeat whole-edition updates just to reach a message
+  already covered by a faithful fixture.
+- A changed aggregate IPK/installer hash requires checking the changed package's
+  delivery/load boundary; it does not by itself select every feature in that
+  package. Compare inner files, generated code, entrypoints, permissions, shared
+  dependencies and state formats. Metadata/font-only changes do not imply a new
+  input/watchdog implementation. If a dependency cannot be isolated, investigate
+  it or select the appropriate broader cases; do not exclude it by assumption.
+- After a supported installation/update chosen for this QA pass, make one short
+  usable-state check appropriate to that transition. Reuse that observation for
+  related cases instead of reinstalling once per issue. Keep independent recovery
+  readiness before any device change; exercising destructive fault/failsafe cases
+  is selected only when their mechanisms or preconditions are affected.
+- Record why unrelated cases are **not selected for this regression pass**.
+  Keep their historical observations and limitations, without calling them passes
+  on new artifacts. An existing unresolved release-blocking failure stays a gate;
+  narrowing the list cannot waive it. A genuinely deferred risk requires the
+  maintainer's explicit decision, not silence.
+
+The full matrix in component test plans is a case library. Startup changes can
+select standby and AC cold boot separately; input/routing changes can select
+Home, Back, key-up and emergency recovery; install/updater changes can select
+particular update/rollback/source-state transitions. Neither a new release number,
+a version-only bump nor a broad directory match makes every library row mandatory.
+The complete frozen CI/build, signing/provenance checks and existing device
+ownership/consent rules remain unchanged.
+
+Record one row per **selected** physical scenario with build run/attempt, artifact
+SHA-256, model/firmware, initial state/upgrade source, expected/observed result,
+evidence link and untested paths. Distinguish standby from cold boot, physical
+controls from synthetic replies, and actual rollback from baseline inspection.
+Finish the selected case pass and consolidated failure inventory before fixes.
+
+Carry an observation as a pass only when all artifacts used by that scenario have
+identical hashes and its preconditions (firmware, prior state/version and upgrade
+path) match. Source similarity across rebuilt packages is insufficient to claim
+new-artifact acceptance. A case excluded after dependency review is **not selected**,
+not automatically passed or newly accepted. Do not repeat unchanged cases merely
+because the overall release number changed, carry another model's result, or
+label an untested path passed. Unresolved failures retain their recorded result.
 
 For a failed CI job at unchanged source, use GitHub's **Re-run failed jobs** or
 `gh run rerun RUN_ID --failed`; successful jobs and their artifacts remain
@@ -444,19 +534,25 @@ PR checks. Required status summaries fail if any selected check fails or is
 unexpectedly skipped.
 Feature branches run affected checks on PR events. Small authenticated Actions
 receipts let candidate jobs consume already successful units with identical
-nonmetadata source, selection unit, shard, OS/image, exact runtime/dependencies
-and UTC day. Setup also binds the full Git tree. Each unit runs once for matching
-inputs; missing or invalid evidence executes it. Browser core and full themes
+audited per-unit source projection, selection unit, shard, OS/image, exact
+runtime/dependencies and UTC day. Shared/unknown/product inputs remain
+conservative, and setup additionally binds the complete Git tree. Each unit runs
+once for matching inputs; missing or invalid evidence executes it. Browser core and full themes
 remain separate, and ARM Python retains its privileged checks. Full candidate
 coverage and required job names are unchanged. Current README/plan sanity checks
 and all assembly/signing/package checks remain independent.
 
-Only same-repository first-attempt PR runs may produce receipts, after fresh checks
-pass. Consumers verify artifact digest/size, completed successful run and originating
-job, current attempt/latest branch evidence and the actual tested merge tree through
-GitHub data. Fork PRs and explicit reruns execute fresh. API/artifact failures fall
-back to tests; no reused unit is re-attested. Old cache markers cannot supply the
-new receipts, and changing the workflow/helper remains a guarded source change.
+Same-repository first-attempt PR runs and explicit full candidates on
+`release/next` may produce receipts after fresh checks pass. Consumers verify
+artifact digest/size, the successful originating job, current attempt/latest
+relevant evidence and the actual tested tree through GitHub data. A completed
+failed full candidate may supply its successful jobs only when the latest
+candidate's corresponding job is also green; scope/full-release markers and
+exact workflow/ref are required. Desktop host tests retain separate platform
+units; package assembly and installed-package checks always execute. Fork PRs
+and explicit reruns execute fresh. API/artifact failures fall back to tests; no
+reused unit is re-attested. Old cache markers cannot supply new receipts, and
+changing the workflow/helper remains a guarded source change.
 See [CI evidence trust, bootstrap and limits](development/CI-CHECKS.md#reuse-and-metadata).
 
 The prepared candidate build completes full coverage once, executing missing

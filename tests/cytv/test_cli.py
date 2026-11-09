@@ -9,6 +9,46 @@ from cytv import cli, state
 
 
 class CLITests(unittest.TestCase):
+    def test_root_node_failure_can_complete_no_root_using_the_same_ssh(self):
+        from tests.cytv.test_operations import OperationTests, Remote
+        from cytv import no_root_observer
+        import shlex
+        fixture=OperationTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.root_bundle()
+        (fixture.payload/'fallback.png').write_bytes(b'fallback')
+        class LegacyTV(Remote):
+            root=True
+            def close(self): pass
+            def run(self, command, data=None, timeout=30):
+                if command == '/usr/bin/node --version':return 'v0.12.2'
+                if 'CYTV_FRESH_ROOT' in command:return 'CYTV_FRESH_ROOT'
+                if 'process.versions.node.split' in command and 'CYTV_ROOT_READY' in command:return 'CYTV_ROOT_MISSING'
+                words=shlex.split(command)
+                if '-e' in words and no_root_observer.ROOT_PROGRAM in words[words.index('-e')+1]:
+                    index=words.index('-e')+1
+                    words[index]=words[index].replace(no_root_observer.ROOT_PROGRAM,no_root_observer.PROGRAM)
+                    command=shlex.join(words)
+                return super().run(command,data,timeout)
+        remote=LegacyTV()
+        output=[]
+        with patch('cytv.cli.package.verify_payload',return_value=fixture.manifest), patch('cytv.tv.SSAP') as ssap:
+            ssap.return_value.__enter__.return_value.inventory.return_value=fixture.inventory
+            ssap.return_value.__enter__.return_value.key='PRIVATE-PAIRING'
+            code=cli.main(['install','--host','192.0.2.10','--edition','root','--yes','--language','en',
+                           '--data-dir',str(fixture.root/'cli-state')],
+                          connect=lambda *_:remote, ask=lambda prompt:'1' if 'Alternative edition' in prompt else '',
+                          write=output.append, payload_root=fixture.payload)
+        self.assertEqual(code,0,'\n'.join(output))
+        profiles=state.Store(fixture.root/'cli-state').profiles()
+        selected=next(p for p in profiles if p['edition']=='no-root')
+        self.assertEqual(selected['connection'],'root-ssh')
+        self.assertEqual(selected['port'],22)
+        self.assertNotIn('PRIVATE-PAIRING','\n'.join(output))
+        submitted=[call[2]['id'] for call in remote.calls if call[0]=='luna' and call[1].endswith('/dev/install')]
+        self.assertEqual(submitted,['com.local.nativehome','com.gathin.tvhome'])
+
     def test_unknown_graphics_stops_no_root_before_pairing(self):
         from unittest.mock import MagicMock
         from cytv.errors import UserError
@@ -359,6 +399,7 @@ class CLITests(unittest.TestCase):
                 if 'CYTV_PYTHON_BOUND' in command:return ''
                 if 'CYTV_ROOT_READY' in command: return 'CYTV_ROOT_READY'
                 if 'CYTV_EXISTING_ROOT' in command: return 'CYTV_EXISTING_ROOT'
+                if 'CYTV_EXISTING_UPDATER' in command: return ''
                 if 'CYTV_C1_GATE' in command: return ''
                 if 'deploy.json' in command: return '{"stage":"installed-recovery-only"}'
                 if 'deploy.py status' in command:
@@ -378,7 +419,7 @@ class CLITests(unittest.TestCase):
             remote = Remote()
             code, output, calls = self.run_cli(['--host', '192.0.2.10', '--edition', 'root', '--data-dir', tmp], ['', ''], remote=remote)
             self.assertEqual(code, 0, output)
-            self.assertIn('Root is already installed', output)
+            self.assertIn('Reinstall Root using this installer', output)
             self.assertIn('left unchanged', output)
             self.assertFalse(list(Path(tmp).glob('reports/*.json')))
             self.assertIsNone(state.Store(tmp).pending(state.target('192.0.2.10','root')))
@@ -579,7 +620,7 @@ class CLITests(unittest.TestCase):
              patch('cytv.cli.package.verify_payload', return_value={}), \
              patch('cytv.tv.SSAP') as ssap, patch('cytv.cli.Installer') as installer:
             ssap.return_value.__enter__.side_effect = TVNotReady()
-            code, output, calls = self.run_cli(['--host', '192.0.2.10', '--edition', 'no-root', '--data-dir', tmp], ['', '', 'q'], remote=remote)
+            code, output, calls = self.run_cli(['--host', '192.0.2.10', '--edition', 'no-root', '--data-dir', tmp], ['', '', '', 'q'], remote=remote)
             self.assertEqual(code, 130, output)
             self.assertIn('Turn on your TV', output)
             self.assertIn('Installation has not started', output)
@@ -620,16 +661,20 @@ class CLITests(unittest.TestCase):
             session = ssap.return_value
             session.key = None
             session.inventory.return_value = inventory
+            session.icon_diagnostics = {'schema': 1, 'status': 'complete', 'fallback': 3}
             session.__enter__.side_effect = [TVNotReady(), session]
             code, output, calls = self.run_cli(['--host', '192.0.2.10', '--edition', 'no-root', '--data-dir', tmp],
-                                               ['', '', ''], remote=Remote())
+                                               ['', '', 'Aashiyaan', ''], remote=Remote())
             self.assertEqual(code, 0, output)
             self.assertEqual(len(calls), 1)
             self.assertEqual(ssap.call_count, 2)
             session.inventory.assert_called_once_with(b'test-fallback')
             installer.return_value.install.assert_called_once_with(inventory, None, False)
+            self.assertEqual(installer.return_value.tv_name, 'Aashiyaan')
             installer.return_value.trial.assert_not_called()
             self.assertIn('Packages installed; Home Helper launch requested.', output)
+            report = json.loads(next(Path(tmp).glob('reports/*.json')).read_text())
+            self.assertEqual(report['tv'].get('icon_inventory'), session.icon_diagnostics)
             self.assertNotRegex(output.lower(), r'trial|countdown|keep using|preview release')
 
     def test_installation_failure_is_never_caught_as_inventory_retry(self):

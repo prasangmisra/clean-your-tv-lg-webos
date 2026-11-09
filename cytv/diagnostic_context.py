@@ -7,6 +7,7 @@ import stat
 
 from .state import private_write, sync_directory
 from .errors import LUNA_STATES, PACKAGE_FAILURE_REASONS
+from .root_action_failure import ACTIVATION_CODES
 
 KERNEL_ARCHES = ('armv7l', 'armv7', 'armv8l', 'aarch64', 'arm64', 'x86_64', 'i686', 'unknown')
 ROOT_REQUIREMENTS = ('root-user', 'python3', 'luna-send', 'apps-directory',
@@ -14,13 +15,15 @@ ROOT_REQUIREMENTS = ('root-user', 'python3', 'luna-send', 'apps-directory',
 
 ROOT_ACTIONS = ('inspect', 'install', 'status', 'remove', 'enable', 'restore', 'uninstall', 'clean-remove', 'clean-status')
 
-REASONS = ('unknown', 'user-error', 'ssh-command-failed', 'ssh-unreachable',
+REASONS = ('unknown', 'user-error', 'ssh-command-failed', 'ssh-unreachable', 'ssh-access-denied', 'ssh-refused', 'ssh-timeout',
            'ssh-authentication', 'ssh-identity-changed', 'ssh-trust-record', 'ssh-identity-unverified', 'host-runtime',
            'helper-running', 'helper-state-unverified', 'root-requirements',
-           'pending-operation', 'root-operation-unconfirmed', 'version-mismatch',
+           'pending-operation', 'root-operation-unconfirmed', 'project-apps-remain', 'version-mismatch',
            'inventory-unavailable', 'graphics-unverified', 'root-home-interfaces',
            'root-worker-busy', 'root-access-required', 'removal-failed',
-           'cleanup-check-failed', 'connection-interrupted')
+           'cleanup-check-failed', 'connection-interrupted', 'operation-timeout', 'tv-storage-full')
+REASONS += ACTIVATION_CODES
+REASONS += ('installer-runtime-mismatch',)
 ACTIONS = ('recover', 'install', 'uninstall', 'restore', 'status', 'doctor', 'home-diagnostics',
            'enable-system-updates', 'enable-firmware-access', 'disable-firmware-access',
            'recover-system-rollback', 'replace-system-updater', 'clean-wam-cache')
@@ -39,7 +42,7 @@ STAGES = ('unknown', 'blocked', 'reserved', 'root-deploy', 'root-updater', 'supe
 STAGES += ('requested','original-writers-fenced','controls-restored','package-removal','private-cleanup','verified-clean')
 CODES = ('unknown_operation', 'operation_pending', 'verified', 'installation_requires_recovery',
          'operation_requires_recovery', 'recovery_evidence_required', 'continuation_requires_recovery',
-         'historical_completion_is_not_current')
+         'historical_completion_is_not_current', 'installer-runtime-mismatch')
 COMPONENTS = {'com.gathin.tvhome': 'home', 'com.local.nativehome': 'helper',
               'com.cleanyourtv.root.preview': 'root', 'com.cleanyourtv.root.updater': 'root_updater',
               'com.cleanyourtv.system.updater': 'system_updater'}
@@ -49,6 +52,21 @@ RECOVERY_REASONS = ('original_final_readback_verified','recovery_evidence_requir
                     'package-terminal-unverified','current-package-files-unverified','updater-baseline-unverified',
                     'stock-routing-unverified','intent-guardian-unverified','recovery-code-incompatible',
                     'recovery-evidence-unverified')
+
+
+ROOT_SETUP_CHECKS = ('receipt', 'stock-home', 'restored-journal', 'files', 'product',
+                     'updater', 'rollback-baseline', 'updater-transaction', 'binding')
+ROOT_SETUP_REASONS = ('not-run', 'pending', 'verified', 'restoration-pending',
+                      *(name+'-unverified' for name in ROOT_SETUP_CHECKS))
+
+
+def root_setup_summary(value):
+    value = mapping(value)
+    checks = mapping(value.get('checks'))
+    return {'reason': choice(value.get('reason'), ROOT_SETUP_REASONS),
+            'checks': {name: choice(checks.get(name),
+                ('not-run', 'pending', 'verified', 'unverified', 'not-required'))
+                for name in ROOT_SETUP_CHECKS}}
 
 
 def choice(value, allowed, default='unknown'):
@@ -93,9 +111,44 @@ def root_diagnostics_summary(value):
     return result
 
 
+def inventory_failures(value):
+    result={}
+    reasons=('root-required','client-start-failed','client-error','timeout','oversized-reply',
+             'negative-reply','permission-denied','service-missing','method-missing','malformed-reply')
+    for key,detail in mapping(value).items():
+        if key not in ('applications','inputs'):continue
+        detail=mapping(detail)
+        item={'reason':choice(detail.get('reason'),reasons)}
+        code=detail.get('error_code')
+        if type(code) is int and -(2**31)<=code<2**31:item['error_code']=code
+        result[key]=item
+    return result
+
+
 def tv_summary(value):
     value = mapping(value)
     result = metadata(value)
+    if 'icon_inventory' in value:
+        icons = mapping(value['icon_inventory'])
+        result['icon_inventory'] = {'schema': 1, 'status': choice(icons.get('status'),
+            ('reading', 'complete', 'unavailable'), 'unavailable')}
+        for key in ('apps', 'embedded', 'fallback', 'missing_uri', 'rejected_uri', 'fetch_failed', 'invalid_image'):
+            count = icons.get(key)
+            if type(count) is int and 0 <= count <= 1800:
+                result['icon_inventory'][key] = count
+    if 'root_setup_recovery' in value:
+        result['root_setup_recovery'] = root_setup_summary(value['root_setup_recovery'])
+    if 'root_inventory' in value:
+        inventory=mapping(value['root_inventory'])
+        result['root_inventory']={key:choice(inventory.get(key),('read','unavailable','invalid'))
+                                  for key in ('applications','inputs')}
+    if 'root_inventory_failures' in value:
+        result['root_inventory_failures']=inventory_failures(value['root_inventory_failures'])
+    if version(value.get('node_version')):
+        result['node_version'] = value['node_version']
+    if 'node_version_status' in value:
+        result['node_version_status'] = choice(value['node_version_status'],
+            ('read', 'missing', 'launch-error', 'invalid-output', 'unavailable'), 'unavailable')
     if 'root_diagnostics' in value:
         result['root_diagnostics'] = root_diagnostics_summary(value['root_diagnostics'])
     if 'setup_outcome' in value:
@@ -110,6 +163,8 @@ def tv_summary(value):
         result['arm32_supported'] = value['arm32_supported']
     if value.get('home_backend') in ('system-profile', 'c1-native-gate'):
         result['home_backend'] = value['home_backend']
+    if type(value.get('home_backend_schema')) is int and value['home_backend_schema'] in (2,3):
+        result['home_backend_schema'] = value['home_backend_schema']
     if 'root_requirements' in value:
         checks = mapping(value['root_requirements'])
         from .root_capabilities import CALLS
@@ -127,6 +182,31 @@ def tv_summary(value):
         result['components'] = {key: item for key, item in mapping(value['components']).items()
                                  if key in COMPONENTS.values() and version(item)}
     return result
+
+
+def collect_node_version(remote, info):
+    """Read evidence before admission; never substitute it for runtime probes."""
+    info.pop('node_version', None)
+    info['node_version_status'] = 'unavailable'
+    try:
+        reply = remote.run('''if [ ! -e /usr/bin/node ] && [ ! -L /usr/bin/node ]; then
+printf CYTV_NODE_MISSING
+elif cytv_node_version=$(/usr/bin/node --version 2>/dev/null); then
+printf 'CYTV_NODE_VERSION %s' "$cytv_node_version"
+else
+printf CYTV_NODE_LAUNCH_ERROR
+fi''', timeout=10).strip()
+    except Exception:
+        return
+    if reply == 'CYTV_NODE_MISSING':
+        info['node_version_status'] = 'missing'
+    elif reply == 'CYTV_NODE_LAUNCH_ERROR':
+        info['node_version_status'] = 'launch-error'
+    else:
+        match = re.fullmatch(r'CYTV_NODE_VERSION v([0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5})', reply) if type(reply) is str else None
+        info['node_version_status'] = 'read' if match else 'invalid-output'
+        if match:
+            info['node_version'] = match[1]
 
 
 def collect_metadata(remote, info):
@@ -149,11 +229,23 @@ def worker_summary(value):
     value = mapping(value)
     result = {'exception_type': choice(value.get('exception_type'),
               ('CalledProcessError', 'TimeoutExpired', 'ValueError', 'RuntimeError', 'OSError',
-               'PermissionError', 'FileNotFoundError', 'TypeError', 'KeyError'))}
+               'PermissionError', 'FileNotFoundError', 'TypeError', 'KeyError', 'TimeoutError'))}
     for key, low, high in (('exit_status', -255, 255), ('errno', 0, 4095)):
         item = value.get(key)
         if type(item) is int and low <= item <= high:
             result[key] = item
+    if 'stage' in value:result['stage']=choice(value['stage'],STAGES)
+    if 'cleanup_step' in value:
+        result['cleanup_step']=choice(value['cleanup_step'],('routing-inverse','runtime-restore',
+            'provision-rollback','startup-hook','legacy-lockdown','registration-restore','legacy-permissions','home-readback'))
+    detail=mapping(value.get('luna'))
+    if detail:
+        result['luna']={'call':choice(detail.get('call'),('apps-dev','apps','home-settings','home-profiles',
+            'helper-disable','home-disable','activities-list','activity-cancel','inputs-list','input-delete','other'),'other'),
+            'reason':choice(detail.get('reason'),('negative-reply','permission-denied','service-missing','method-missing',
+                'timeout','oversized-reply','malformed-reply','client-start-failed'))}
+        code=detail.get('error_code')
+        if type(code) is int and -(2**31)<=code<2**31:result['luna']['error_code']=code
     return result
 
 
@@ -161,8 +253,8 @@ def product_summary(value):
     value = mapping(value)
     result = {key: choice(value[key], allowed) for key, allowed in
               (('state', STATES), ('stage', STAGES), ('code', CODES)) if key in value}
-    if 'failure' in value:
-        result['failure'] = worker_summary(value['failure'])
+    for key in ('failure','last_failure'):
+        if key in value:result[key] = worker_summary(value[key])
     if value.get('protocol')=='clean-removal-v1':
         from .recovery_state import REMOVAL_REASONS
         result['removal_reason']=choice(value.get('reason'),REMOVAL_REASONS)
@@ -259,7 +351,7 @@ def failure_summary(value):
     result = {'action': choice(value.get('action'), ACTIONS),
               'phase': choice(value.get('phase'), PHASES),
               'reason_code': choice(value.get('reason_code'), REASONS)}
-    error_types = ('RootCapabilityError', 'UserError', 'TVCommandError', 'TVRejected', 'PythonCacheError',
+    error_types = ('RootCapabilityError', 'UserError', 'LocalRecoveryError', 'TVCommandError', 'TVRejected', 'PythonCacheError',
                    'PythonPreflightError', 'DeveloperKeyError', 'TVConnectionError',
                    'AuthenticationException', 'BadHostKeyException', 'NoValidConnectionsError',
                    'OSError', 'RuntimeError', 'ValueError', 'TimeoutError', 'Exception')
@@ -304,6 +396,11 @@ def failure_summary(value):
     connection = mapping(value.get('connection'))
     if connection.get('protocol') == 'developer-key':
         result['connection'] = {'protocol': 'developer-key', 'reason_code': DeveloperKeyError('', connection.get('reason_code')).reason_code}
+    elif connection.get('protocol') == 'ssh':
+        from .failure_help import NETWORK_CAUSES
+        causes = connection.get('causes')
+        result['connection'] = {'protocol': 'ssh', 'causes': sorted({item for item in causes
+            if type(item) is str and item in NETWORK_CAUSES}) if type(causes) is list else []}
     elif connection.get('protocol') == 'ssap':
         code = connection.get('close_code')
         safe = TVConnectionError('', close_code=code if type(code) is int else None, reason_code=connection.get('reason_code'))
@@ -312,6 +409,12 @@ def failure_summary(value):
     recovery = root_recovery_details(value.get('root_recovery'))
     if recovery:
         result['root_recovery'] = recovery
+    if 'no_root_observer' in value:
+        from .errors import no_root_observer_details
+        result['no_root_observer'] = no_root_observer_details(value['no_root_observer'])
+    if 'local_recovery' in value:
+        from .errors import local_recovery_details
+        result['local_recovery'] = local_recovery_details(value['local_recovery'])
     if 'checks' in value:
         # Stored projections are id -> status, not UI events.
         result['checks'] = checks_summary({key: {'status': item} for key, item in mapping(value['checks']).items()})

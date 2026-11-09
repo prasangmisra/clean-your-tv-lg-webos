@@ -36,13 +36,21 @@ def create_report(store, action, profile, phase, error=None, tv_info=None, *, ch
         'checks': context.checks_summary(checks),
         'privacy': 'No addresses, SSH identities, exception text, credentials, app inventory, environment or raw TV logs are collected.',
     }
+    if profile:
+        if profile.get('root_variant') == 'node012-beta':
+            report['root_variant'] = 'node012-beta'
+        if profile.get('connection') == 'root-ssh':
+            report['connection_mode'] = 'root-ssh'
     from .recovery_state import assess, summary
+    if pending and pending.get('activation_restore') in ('verified', 'unverified'):
+        report['activation_recovery'] = {'lg_home':pending['activation_restore'],
+                                         'retry_required':pending.get('activation_restore_pending') is True}
     report['recovery'] = {**summary(profile or {}, pending), **assess(profile, pending, status)}
     removal=pending or (getattr(store,'diagnostic_removal',None) if action in ('uninstall','recover') else None)
     if removal and removal.get('recovery_protocol')=='clean-removal-v1':
         from .recovery_state import removal_summary
         report['removal']=removal_summary(removal)
-    from .failure_help import for_error, report_summary
+    from .failure_help import for_error, report_summary, network_failure_causes
     help = for_error(error, phase, profile, pending)
     if help:
         report['guidance'] = report_summary(help)
@@ -52,6 +60,9 @@ def create_report(store, action, profile, phase, error=None, tv_info=None, *, ch
     elif type(error).__name__ in ('NoValidConnectionsError', 'AuthenticationException', 'BadHostKeyException', 'ImportError'):
         reason = {'NoValidConnectionsError': 'ssh-unreachable', 'AuthenticationException': 'ssh-authentication',
                   'BadHostKeyException': 'ssh-identity-changed', 'ImportError': 'host-runtime'}[type(error).__name__]
+    if phase == 'ssh-connect' and help and help['code'] in ('ssh-unreachable', 'ssh-access-denied', 'ssh-refused', 'ssh-timeout'):
+        reason = help['code']
+        report['connection'] = {'protocol': 'ssh', 'causes': network_failure_causes(error)}
     report['reason_code'] = context.choice(reason, context.REASONS)
     if status is not None:
         report['status'] = context.status_summary(status)
@@ -68,6 +79,11 @@ def create_report(store, action, profile, phase, error=None, tv_info=None, *, ch
                 report['ssh_command'][key] = value
         recovery = root_recovery_details(getattr(error, 'root_recovery', None))
         if recovery: report['root_recovery'] = recovery
+    if hasattr(error, 'no_root_observer'):
+        report['no_root_observer'] = getattr(error, 'no_root_observer')
+    if hasattr(error, 'local_recovery'):
+        from .errors import local_recovery_details
+        report['local_recovery'] = local_recovery_details(error.local_recovery)
     if isinstance(error, TVRejected):
         report['luna'] = error.luna
     if isinstance(error, PythonCacheError):
@@ -79,7 +95,7 @@ def create_report(store, action, profile, phase, error=None, tv_info=None, *, ch
             ('available_kib', 'required_kib', 'wam_session_kib') if getattr(safe, key) is not None})
     if error is not None:
         safe_error = context.failure_summary(report)
-        for key in ('luna', 'connection', 'ssh_command', 'python_cache', 'python_runtime', 'root_recovery'):
+        for key in ('luna', 'connection', 'ssh_command', 'python_cache', 'python_runtime', 'root_recovery', 'no_root_observer', 'local_recovery'):
             if key in report:
                 report[key] = safe_error.get(key, {})
     report.update(context.history(report, store, profile, error, removal or pending))

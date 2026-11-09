@@ -45,7 +45,8 @@ alternates, page-preserving language links, sitemap inclusion and exported local
 links/anchors, including same-page help links and existing source-reference files.
 The translation verifier recursively checks nested keys and array lengths. Browser acceptance uses the root project's Playwright, verifies
 all pages without JavaScript, keyboard language switching, selected mobile
-layouts and the offline Root/No-root demo. Use `BROWSER_CHANNEL=chromium` for
+layouts, browser-language selection, remembered manual preferences, explicit locale
+URLs, blocked storage and the offline Root/No-root demo. Use `BROWSER_CHANNEL=chromium` for
 Playwright's bundled browser or the default installed Chrome. Set
 `WEBSITE_SCREENSHOTS=/absolute/output/directory` to retain QA images.
 
@@ -86,18 +87,28 @@ Public download actions use
 expand hardware compatibility beyond documented version-specific results. Newly
 written website translations have automated/browser checks, not native-speaker
 acceptance. The compatibility page includes localized access/runtime requirements and an owner
-checklist. Detailed device evidence remains linked to its maintained English
-record. No private diagnostics or other users’ installation reports are copied
-into the new website content.
+checklist. A short user-confirmed model list reads `../docs/compatibility-reports.json`;
+only records explicitly marked `showOnWebsite: true` appear. It displays models,
+editions and known versions; source links, dates and diagnostic details remain
+in the audit record. Results apply to their recorded versions, not every device
+in a model family. No private diagnostics are copied into website content.
 
 ## URLs and publication
 
 The configured public base is
 `https://razdva122.github.io/clean-your-tv-lg-webos/`. Each language has six pages:
 home, installation, edition comparison, compatibility, themes and help. The root URL
-mirrors English and canonicalizes to `/en/`. Each page has its own canonical and
+renders English without JavaScript and canonicalizes to `/en/`. With JavaScript,
+only this language-neutral entry redirects to the saved manual language choice,
+then the first supported browser language, or English if none match. Regional tags
+map to supported translations, including Portuguese and both Chinese scripts.
+The redirect preserves query parameters and fragments. Each page has its own canonical and
 reciprocal `hreflang` links; `x-default` points to the corresponding English page.
-Languages switch through ordinary links without forced locale redirects.
+Languages switch through ordinary links. With JavaScript, selecting a language
+stores only its locale code in `localStorage` under `cytv-website-language` for
+future visits to the root URL. Explicit language URLs always retain their language
+and do not overwrite this preference. Blocked storage leaves language links and
+browser detection usable; without JavaScript, links still work without persistence.
 
 Old root `#root` and `#no-root` links forward to the corresponding demo mode.
 Ordinary demo links in README now target `demo/`. Demo internals are marked
@@ -155,3 +166,25 @@ only in the development server; it is not a production server or redirect.
 checks `/demo/` returns 200, exercises both launcher editions and inline themes,
 then stops the owned server. This complements the static export/browser test
 which resolves directory indexes itself.
+
+## Visual design
+
+The product site uses a graphite palette, restrained warm ambient gradients,
+a floating translucent header, pill controls and rounded product imagery inspired
+by https://plxnative.com/. The centered home-page introduction leads into the
+existing launcher demo. Shared tokens and CSS apply the same visual language to
+all locales and guides; screenshots, installation content and destinations stay
+project-owned. The header and language/menu controls work without JavaScript;
+its background remains readable without backdrop-filter support.
+
+The interactive demo uses matching graphite surfaces, rounded edition and remote
+controls, outlined theme previews and a framed TV viewport. Its shared source is
+`../preview/index.html`; the preview renderer, input controls and theme loader
+remain the same in local development and the exported website.
+
+The demo theme selector has independent Video and 4K filter toggles. Enabling
+both shows their intersection; disabling both shows the complete catalogue.
+Filters use exported `hasVideo`/`has4k` metadata, preserve the selected theme and
+remain active across edition switches within the current page session. An empty
+result explains that no themes match; toggle the filters off to restore cards.
+Filtering does not fetch or install theme packages.

@@ -20,8 +20,22 @@ from installation import _optional_record, terminal_removal
 APPS = ('com.cleanyourtv.root.preview', 'com.cleanyourtv.root.updater',
         'com.cleanyourtv.system.updater', 'com.cleanyourtv.updater',
         'com.local.nativehome', 'com.gathin.tvhome')
+# Presence (including dangling links) requires the original routing backend.
+ROUTING_EVIDENCE=('profile-trial.json','persistent-intent.json','persistent-binding.json','boot-continuation.json',
+                  'profile-candidate.stage','home-backend.json','c1-gate','c1-keyfilter')
+
 PRE_ACTIVATION=('prepared','install-submitting','install-accepted','install-observed','payload-verified','personalization-complete')+tuple(
     'provision-'+step+'-'+phase for step in ('apply','resume_pending','refresh','finalize') for phase in ('starting','complete'))
+
+
+# Diagnostic context only; never used for recovery admission or progress.
+@contextmanager
+def cleanup_step(name):
+    try:
+        yield
+    except Exception as error:
+        error.cleanup_step=name
+        raise
 
 
 def boot_format(value):
@@ -34,6 +48,23 @@ def boot_format(value):
 def verified_restart(record):
     baseline=record.get('cleanup_boot_id');verified=record.get('cleanup_verified_boot_id')
     return bool(boot_format(baseline) and boot_format(baseline)==boot_format(verified) and baseline!=verified)
+
+
+
+def activities(device):
+    """Read the complete activity inventory on both retail API generations."""
+    payload={'details':True,'subscribers':True,'current':False,'internal':False}
+    try:
+        reply=device.rpc('com.palm.activitymanager/list',payload)
+    except (RuntimeError,TimeoutError) as error:
+        if getattr(error,'luna',{}).get('reason') not in ('timeout','service-missing','method-missing','negative-reply'):
+            raise
+        reply=device.rpc('com.palm.activitymanager/getActivityInfo',payload)
+    rows=reply.get('activities') if isinstance(reply,dict) else None
+    if (not isinstance(reply,dict) or reply.get('returnValue') is not True or not isinstance(rows,list)
+            or any(not isinstance(row,dict) or ('callback' in row and not isinstance(row['callback'],dict)) for row in rows)):
+        raise ValueError('Activity inventory could not be verified')
+    return rows
 
 
 def runtime_restore(payload, uid=0):
@@ -67,6 +98,22 @@ def runtime_restore(payload, uid=0):
         finally:os.close(fd)
         backend.binary=lambda root,uid:path
     return {'returnValue':True,'result':cli.main('restore')}
+
+
+def compositor_stock(payload):
+    """Fresh stock observation from current verified support, never old code."""
+    import sys
+    import deploy
+    payload=Path(payload)
+    deploy.verify_bundle(payload,allow_experimental=True)
+    release=json.loads(deploy.checked_file(payload,'release.json'))
+    if release.get('routing')!='compositor-keyfilter-v1':
+        raise ValueError('current_compositor_support_required')
+    sys.path.insert(0,str(payload/'runtime'))
+    import c1_keyfilter
+    observed=c1_keyfilter.probe()
+    return {'mode':'stock-compositor','target':{k:observed['target'][k] for k in ('dev','ino','size')},
+            'target_sha256':observed['target_sha256']}
 
 
 @contextmanager
@@ -136,14 +183,25 @@ def retire_tree(path, allowed, keep=(), uid=0, parent_uid=None):
 
 
 def routes(device, record=None):
+    if record is not None and device.routing_untouched(record):
+        return {'mode':'never-applied'}
+    if record is not None and device.compositor_stock_eligible(record):
+        return device.compositor_stock(record)
     settings=device.rpc('com.webos.settingsservice/getSystemSettings',{'category':'general','keys':['defaultApps']})
     home=settings.get('settings',{}).get('defaultApps',{}).get('home')
     if settings.get('returnValue') is not True or not isinstance(home,str) or not home or home in APPS:
         raise ValueError('route_readback_unverified')
     never=(record or {}).get('routing_never_applied') is True
     try:reply=device.rpc('com.webos.service.systemprofile/getProfiles',{'names':['defaultApps','idleApp'],'subscribe':False})
-    except (OSError,RuntimeError,ValueError,KeyError,subprocess.SubprocessError):
+    except (OSError,RuntimeError,ValueError,KeyError,subprocess.SubprocessError) as error:
         if never:return {'mode':'never-applied','home':home}
+        # Only the firmware's exact missing-service reply admits stock-only
+        # verification. A timeout/ACL failure cannot select another backend.
+        stock={'mode':'stock-settings','home':'com.webos.app.home'}
+        if (getattr(error,'systemprofile_missing',False) is True and home==stock['home']
+                and (record or {}).get('profileless_cleanup_eligible') is True
+                and (record.get('routes') is None or record['routes']==stock)):
+            return stock
         raise
     if reply.get('returnValue') is not True:
         if never:return {'mode':'never-applied','home':home}
@@ -225,25 +283,6 @@ def validate_restored_root_api(files,base,root_updater,uid=0):
 
 
 
-def original_absence_safe(record, app):
-    """An absent slot needs original writer evidence, not a progress flag."""
-    original=record.get('original')
-    if not isinstance(original,dict) or 'request' not in original or not isinstance(original.get('components'),dict):return False
-    components=record.get('fenced_components',original['components'])
-    if not isinstance(components,dict):return False
-    key={APPS[0]:'deploy',APPS[1]:'root-bootstrap',APPS[2]:'system-bootstrap'}.get(app)
-    if key and key not in components:return False
-    journal=components.get(key) if key else None
-    if journal is None:
-        request=original.get('request')
-        if request is None or key is None:return True
-        before={'deploy':('reserved','blocked'),
-                'root-bootstrap':('reserved','blocked','root-deploy'),
-                'system-bootstrap':('reserved','blocked','root-deploy','root-updater')}
-        return isinstance(request,dict) and request.get('stage') in before[key]
-    return isinstance(journal,dict) and journal.get('stage',journal.get('phase')) in ('prepared','installing-updater','installing-supervisor')
-
-
 def validate_package_receipts(record):
     packages=record.get('packages')
     if not isinstance(packages,dict) or set(packages)!=set(APPS):raise ValueError('incomplete_removal_receipts')
@@ -252,7 +291,7 @@ def validate_package_receipts(record):
             raise ValueError('package_absence_unverified')
 
 
-def remove_packages(device, record, save, absent_safe=None):
+def remove_packages(device, record, save):
     """Retry explicit removal against current presence, keeping old outcomes separate."""
     from observed_install import remove
     errors=[]

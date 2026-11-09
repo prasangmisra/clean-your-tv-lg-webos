@@ -1,5 +1,68 @@
 # Release history and device evidence
 
+- [v1.15.0 candidate QA, failure inventory and iterations](2026-11-09-release-1.15.0-qa.md)
+- [v1.15.0 candidate preparation and scoped cases](2026-11-09-release-1.15.0-preparation.md)
+
+- [Weather candidate integration, 2026-11-09](2026-11-09-weather-candidate-integration.md): green-CI Home/toolkit merges, updated release inventory and packaging decisions; public delivery and physical acceptance pending.
+
+- [Next candidate integration, 2026-11-09](2026-11-09-next-candidate-integration.md): complete PR batch, asynchronous stock-proof and clean-reinstall conflict resolution, combined host verification and untested release gates.
+
+- [Root installer runtime delivery, 2026-11-09](2026-11-09-root-installer-runtime-delivery.md): explicit verified reinstallation, selected-runtime admission and fresh activation failure explanations; physical C2 acceptance remains pending.
+- [Native install admission and cleanup handoff, 2026-11-09](2026-11-09-issue440-native-install-recovery.md): narrow immutable-system-image admission, explicit pre-journal cleanup and a new fenced native request; synthetic verification, physical acceptance pending.
+
+- [v1.14.0 publication, 2026-11-09](2026-11-09-release-1.14.0-publication.md): verified public assets/feeds, immutable accepted build and all shipping notices; reporter confirmation remains open.
+
+- [v1.14.0 candidate QA, 2026-11-09](2026-11-09-release-1.14.0-qa.md): exact signed Android upgrade, C3 signed update/profile/renderer/service and owner Home/audio/emergency/standby pass; complete failure inventory, signing-capacity correction and retained optional Homebrew/legacy limits.
+
+- [Shared Root/Beta KeyFilters development, 2026-11-09](2026-11-09-root-beta-keyfilters.md): capability admission, exact legacy Node and ARM32 build checks, component handoff and unverified native-Home/ribbon limits.
+
+- [Next candidate preparation, 2026-11-09](2026-11-09-next-candidate-preparation.md): integrated PR inventory, combined host checks, authenticated published baselines and coordination of unfinished Root/Beta work; no new device acceptance.
+
+- [Root installer catalog reads over SSH, 2026-11-08](2026-11-08-issue389-direct-catalog-ssh.md): fixed bounded reads without TV Node subprocesses, preserved icon/validation behavior and synthetic host verification; reporter-device acceptance remains unverified.
+
+- [v1.13.0 full candidate artifacts, 2026-11-08](2026-11-08-release-1.13.0-artifacts.md): pinned successful full build, exact embedded Helper equivalence, signed Root provenance, genuine update/rollback and explicit remaining acceptance.
+
+- [Helper 0.8.0 pre-dispatch compatibility, 2026-11-08](2026-11-08-helper-0.8.0-compatibility.md): authenticated published Home 1.13.1, exact new Helper, physical short/triple Home, stopped-state readback and explicit remaining final-candidate gates.
+
+- [C3 preliminary case pass, 2026-11-08](2026-11-08-c3-preliminary-qa.md): complete available case/failure inventory before the fix batch; physical new Root Home/audio/emergency, disabled-state cold boot, No-root preparation failure and explicit remaining gates.
+
+- [Clean removal and reinstallation, 2026-11-08](2026-11-08-root-clean-removal-reinstallation.md): source defect, ownership changes, restored bounded C3 preflight and unverified full-transition acceptance.
+
+- [Developer Mode storage integration, 2026-11-08](2026-11-08-next-candidate-storage-integration.md): PR #435, focused CI/review, unchanged versions and pending #409 device confirmation.
+
+- [v1.13.0 preparation, 2026-11-08](2026-11-08-release-1.13.0-preparation.md): versioned preliminary packages, automated checks, mandatory Helper compatibility blocker and the bounded physical plan. No new TV acceptance.
+
+- [1.12.1 unattended C3 QA, 2026-11-07](2026-11-07-release-1.12.1-unattended-tv-qa.md): exact signed forward/rollback/forward, profile and renderer/service cases, corrected harness findings, standby/wake, final power-off and remaining manual checks.
+
+- [1.12.1 freeze and pre-dispatch checks, 2026-11-07](2026-11-07-release-1.12.1-freeze.md): six-PR scope, authenticated baselines, package/version gates, documentation and bounded acceptance plan.
+
+- [Local recovery storage diagnostics, 2026-11-07](2026-11-07-local-recovery-storage-diagnostics.md): private local failure categories, pre-journal local storage checks and preserved original evidence; no device-recovery claim.
+- [Release 1.12.0 scoped QA, 2026-11-07](2026-11-07-release-1.12.0-scoped-qa.md): exact Android emulator upgrade/native checks, packaged UI and icons, authorized C3 delivery/Home/controls/audio/standby, physical Beta deferral and unresolved pre-suspension Home disable.
+
+- [1.12.0 verified candidate artifacts, 2026-11-07](2026-11-07-release-1.12.0-artifacts.md): successful full build42384446335:1, verified archive/package hashes and pending exact-package acceptance.
+
+- [1.12.0 freeze and package preflight, 2026-11-07](2026-11-07-release-1.12.0-freeze.md): complete five-PR scope, selected versions, signed baselines and pending exact-package acceptance.
+
+- [Small issue follow-ups, 2026-11-07](2026-11-07-small-issue-followups.md): transitional Home status, private retention diagnostics and SSH trust guidance; combined CI, observer test synchronization and remaining device/recovery scope.
+
+- [Post-1.11.0 integration, 2026-11-07](2026-11-07-post-1.11.0-integration.md): legacy Root Beta, optional input discovery, visible icon selection and edition-transition guidance; combined host checks and outstanding exact-package acceptance.
+
+- [1.11.0 maintainer C3 QA](2026-11-07-release-1.11.0-tv-qa.md): exact-byte No-root and final Root controls/audio/standby/emergency, normal full removal after restart, non-blocking icon issue394 and explicit untested paths.
+
+- [1.11.0 failed full run and replacement](2026-11-07-release-1.11.0-candidate-replacement.md): complete failure inventory, combined Windows fixture/CI evidence correction, replacement build and final package gates.
+
+- [1.11.0 freeze and pre-dispatch checks](2026-11-07-release-1.11.0-freeze.md): versioned preliminary payload, bounded C3 Helper compatibility, original SSH failure/recovery and final full-candidate gates.
+
+- [No-root observer storage, 2026-11-07](2026-11-07-no-root-observer-storage.md): writable private storage, one pre-journal storage check and confirmed cleanup for older pending capsules; retail installation/recovery remains unverified.
+
+- [No-root observer runtime diagnostics, 2026-11-07](2026-11-07-issue378-observer-runtime-diagnostics.md): bounded runtime/guard error envelopes, retained storage reasons and unchanged recovery/source bindings; original #378 cause remains unconfirmed.
+
+- [No-root webOS 3.x compatibility, 2026-11-07](2026-11-07-webos3-compatibility.md): conflict resolution, focus/Updater corrections, exact legacy-Node checks, package tests and pending candidate/device acceptance.
+
+- [Root removal catalog fallback, 2026-11-07](2026-11-07-issue240-removal-catalog.md): bounded catalog compatibility, first/latest failure detail and source regressions; original #240 recovery and retail acceptance remain unverified.
+
+- [Next candidate integration, 2026-11-07](2026-11-07-next-candidate-integration.md): inventory fallback, experimental compositor, formatting, cleanup/recovery and observer diagnostics; combined source checks, metadata-base recovery and pending versioned build/device acceptance.
+
 - [Removal compatibility corrections, 2026-11-07](2026-11-07-removal-compatibility.md): real-stdin regression, bounded SDK/private-data compatibility, legacy-service boot checkpoint and clearer diagnostics; final changed-removal acceptance pending.
 
 - [Practical clean removal source checkpoint, 2026-11-06](2026-11-06-practical-clean-removal.md): scoped Root/No-root/UI and combined host checks, current broader-run blockers and final candidate/device limits.
@@ -51,6 +114,8 @@ original versions, dates, failed attempts and test limits. A recorded success on
 one model or artifact does not certify later releases or a different TV.
 
 ## Scoped feature checks
+
+- [No-root pairing-key mode repair, 2026-11-08](2026-11-08-issue437-key-mode-repair.md): checked descriptor-only permission restriction for #437, unchanged original-operation evidence and pending reporter-device acceptance.
 
 - [Personal moving-video upload, 2026-11-04](2026-11-04-personal-video-upload.md): desktop video input, source limits, decoder ownership, host/browser evidence and pending TV acceptance.
 

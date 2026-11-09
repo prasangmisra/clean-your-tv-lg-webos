@@ -13,6 +13,7 @@ from observed_install import install as observed_install, OutcomeUnknown
 from python_binding import command as python_command, install_launcher
 
 APP = 'com.cleanyourtv.root.preview'
+LEGACY_NODE_BETA = False
 STATE = Path('/var/lib/clean-your-tv-root')
 INSTALLED = Path('/media/developer/apps')
 RUNTIME_FILES = ('bounded_profile_trial.py', 'cli.py', 'update_guard.py', 'device_adapter.py', 'guardian_device.py',
@@ -32,14 +33,16 @@ def require_device():
 
 def require_node():
     try:
+        policy = ('process.versions.node === "0.12.2"' if LEGACY_NODE_BETA else
+                  'Number(process.versions.node.split(".")[0]) >= 8')
         result = subprocess.run(['/usr/bin/node', '-e',
-            'process.exit(Number(process.versions.node.split(".")[0]) >= 8 ? 0 : 1)'],
+            'process.exit((' + policy + ') ? 0 : 1)'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         if result.returncode == 0:
             return
     except (OSError, subprocess.TimeoutExpired):
         pass
-    raise RuntimeError('Root requires TV Node.js 8+')
+    raise RuntimeError('Root Beta requires TV Node.js 0.12.2' if LEGACY_NODE_BETA else 'Root requires TV Node.js 8+')
 
 
 def checked_file(root, name):
@@ -59,6 +62,8 @@ def verify_bundle(bundle, allow_experimental=False):
     bundle = Path(bundle).resolve()
     manifest = json.loads(checked_file(bundle, 'bundle.json'))
     release = json.loads(checked_file(bundle, 'release.json'))
+    if release.get('runtime_variant') != ('node012-beta' if LEGACY_NODE_BETA else None):
+        raise ValueError('Root runtime variant does not match the device driver')
     experimental = release.get('home_backend') == 'c1-native-gate'
     if 'home_backend' in release or 'experimental' in release or 'native_sha256' in release:
         if (not experimental or release.get('experimental') is not True
@@ -78,6 +83,8 @@ def verify_bundle(bundle, allow_experimental=False):
     if experimental and routing:
         expected.remove('runtime/c1-home-gate')
         expected.update(('runtime/c1-keyfilter-guard', 'runtime/c1_keyfilter.py', 'runtime/c1-home-filter.js'))
+        if 'runtime/c1-home-gate' in manifest.get('files',{}):
+            expected.add('runtime/c1-home-gate')  # Removal-only schema-1 executor; never fresh install routing.
         if release.get('capabilities') != ['theme-receiver-v1','wallpaper-media-v1','c1-keyfilter-v1']:
             raise ValueError('Invalid compositor routing capabilities')
     if manifest.get('package') != package or set(manifest.get('files', {})) != expected:
@@ -341,10 +348,10 @@ def _remove_root(run, proof):
     return {'returnValue': True, 'removed': APP, 'state_retained': str(STATE)}
 
 
-def experimental_admission(routing=None):
+def experimental_admission(routing=None, owned_operation=None):
     # Runs under the installation mutex, before its durable reservation.
     from installation import classify, device_snapshot
-    if classify(device_snapshot())['state'] != 'fresh':
+    if classify(device_snapshot(owned_operation=owned_operation))['state'] != 'fresh':
         raise ValueError('Experimental C1 setup requires a completely fresh product installation')
     if routing == 'compositor-keyfilter-v1':
         from runtime import c1_keyfilter

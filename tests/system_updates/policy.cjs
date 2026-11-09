@@ -218,7 +218,32 @@ assert.equal(
     .minimumSupervisorVersion,
   '1.2.3'
 );
-for (const value of ['1.2.4', '2.0.0', 'bad', null, 111])
+assert.equal(
+  policy.validate({ ...gated, minimumSupervisorVersion: '1.2.4' })
+    .minimumSupervisorVersion,
+  '1.2.4'
+);
+assert.equal(
+  policy.validate({ ...gated, minimumSupervisorVersion: '1.2.5' })
+    .minimumSupervisorVersion,
+  '1.2.5'
+);
+assert.equal(
+  policy.validate({ ...gated, minimumSupervisorVersion: '1.2.6' })
+    .minimumSupervisorVersion,
+  '1.2.6'
+);
+assert.equal(
+  policy.validate({ ...gated, minimumSupervisorVersion: '1.2.7' })
+    .minimumSupervisorVersion,
+  '1.2.7'
+);
+assert.equal(
+  policy.validate({ ...gated, minimumSupervisorVersion: '1.2.8' })
+    .minimumSupervisorVersion,
+  '1.2.8'
+);
+for (const value of ['1.2.9', '2.0.0', 'bad', null, 111])
   assert.throws(() =>
     policy.validate({ ...gated, minimumSupervisorVersion: value })
   );

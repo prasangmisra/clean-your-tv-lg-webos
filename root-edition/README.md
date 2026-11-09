@@ -4,7 +4,7 @@
 
 **Ribbon in Home:** Ribbon is a theme of the single persistent full-screen CARD Home, with its own wallpaper. It does not show another application or HDMI beneath the cards. Theme selection does not change the window type, Home routing or emergency controls. [Behavior and acceptance limits](../docs/THEMES.md#ribbon-over-applications-unreleased).
 
-> This guide describes 1.7.0 with Root/infrastructure 0.8.4 and Root Updater 0.4.2. Use [Releases](https://github.com/Razdva122/clean-your-tv-lg-webos/releases) for the latest published downloads. Exact-artifact results and limits are maintained in the [1.7.0 package acceptance record](../docs/history/2026-11-03-release-1.7.0-final-packages.md).
+> Published v1.13.0 includes Root/infrastructure 0.13.2 and Root Updater 0.5.4; see its [scope and acceptance limits](../docs/RELEASE-1.13.0.md) and [published downloads](https://github.com/Razdva122/clean-your-tv-lg-webos/releases/latest). Historical 1.7.0 used Root/infrastructure 0.8.4 and Root Updater 0.4.2; its [package acceptance record](../docs/history/2026-11-03-release-1.7.0-final-packages.md) retains its original scope.
 
 Use Clean Your TV as the system Home on an **already rooted LG webOS TV**.
 Short Home opens Clean; confirmed Back exit returns through native Home routing.
@@ -58,7 +58,7 @@ Home-button replacement remains separate from this startup limitation. See
 
 Press **Home three times within two seconds**, releasing between presses, to
 restore LG Home and disable Root intent independently of the web interface.
-**Unreleased window cleanup:** Settings Off and Open LG Home close the Root window after an accepted LG Home launch. Reopen Home Root manually for Settings while routing remains off. Emergency/fault cleanup on the profile backend closes Root after verified routing recovery; a window-cleanup failure is separate from routing recovery. New C1 bundles use a separate native stop → owned Root close → LG Home launch sequence, with retained errors on uncertain cleanup. The [C1 contract](../docs/development/C1-NATIVE-GATE.md) describes its mount-free Home-key/return routing, brief LG Home visibility, explicit re-enable and legacy recovery limits.
+**Window cleanup:** Settings Off and Open LG Home close the Root window after an accepted LG Home launch. Reopen Home Root manually for Settings while routing remains off. Emergency/fault cleanup on the profile backend closes Root after verified routing recovery; a window-cleanup failure is separate from routing recovery. New C1 bundles use a separate native stop → owned Root close → LG Home launch sequence, with retained errors on uncertain cleanup. The [C1 contract](../docs/development/C1-NATIVE-GATE.md) describes its mount-free Home-key/return routing, brief LG Home visibility, explicit re-enable and legacy recovery limits.
 
 **Change Home off** also restores LG routing. **Open LG Home** visits LG Home
 once while preserving the routing preference. Long Home can invoke LG features;
